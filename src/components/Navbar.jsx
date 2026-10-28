@@ -51,7 +51,7 @@ export const Navbar = () => {
             </div>
             <div>
               <span className="text-lg font-black tracking-tight text-white group-hover:text-rose-400 transition-colors">
-                Stream<span className="text-rose-500">Vault</span>
+                Nero <span className="text-rose-500">Stream</span>
               </span>
               <span className="hidden sm:block text-[9px] uppercase tracking-widest text-slate-400 font-semibold leading-none">
                 Aggregator UI

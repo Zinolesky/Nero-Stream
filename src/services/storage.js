@@ -3,6 +3,14 @@
  */
 
 const STORAGE_KEYS = {
+  API_KEY: 'nerostream_tmdb_key',
+  PROVIDER_ID: 'nerostream_provider_id',
+  SANDBOX_MODE: 'nerostream_sandbox_mode',
+  HISTORY: 'nerostream_watch_history',
+  BOOKMARKS: 'nerostream_bookmarks',
+}
+
+const LEGACY_KEYS = {
   API_KEY: 'streamvault_tmdb_key',
   PROVIDER_ID: 'streamvault_provider_id',
   SANDBOX_MODE: 'streamvault_sandbox_mode',
@@ -13,7 +21,12 @@ const STORAGE_KEYS = {
 export const storage = {
   getApiKey: () => {
     try {
-      return localStorage.getItem(STORAGE_KEYS.API_KEY) || import.meta.env.VITE_TMDB_API_KEY || ''
+      return (
+        localStorage.getItem(STORAGE_KEYS.API_KEY) ||
+        localStorage.getItem(LEGACY_KEYS.API_KEY) ||
+        import.meta.env.VITE_TMDB_API_KEY ||
+        ''
+      )
     } catch {
       return ''
     }
@@ -33,7 +46,11 @@ export const storage = {
 
   getProviderId: () => {
     try {
-      return localStorage.getItem(STORAGE_KEYS.PROVIDER_ID) || 'vidsrc-to'
+      return (
+        localStorage.getItem(STORAGE_KEYS.PROVIDER_ID) ||
+        localStorage.getItem(LEGACY_KEYS.PROVIDER_ID) ||
+        'vidsrc-to'
+      )
     } catch {
       return 'vidsrc-to'
     }
@@ -49,7 +66,11 @@ export const storage = {
 
   getSandboxMode: () => {
     try {
-      return localStorage.getItem(STORAGE_KEYS.SANDBOX_MODE) || 'strict'
+      return (
+        localStorage.getItem(STORAGE_KEYS.SANDBOX_MODE) ||
+        localStorage.getItem(LEGACY_KEYS.SANDBOX_MODE) ||
+        'strict'
+      )
     } catch {
       return 'strict'
     }
@@ -65,7 +86,9 @@ export const storage = {
 
   getHistory: () => {
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.HISTORY)
+      const data =
+        localStorage.getItem(STORAGE_KEYS.HISTORY) ||
+        localStorage.getItem(LEGACY_KEYS.HISTORY)
       return data ? JSON.parse(data) : []
     } catch {
       return []
@@ -101,7 +124,9 @@ export const storage = {
 
   getBookmarks: () => {
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.BOOKMARKS)
+      const data =
+        localStorage.getItem(STORAGE_KEYS.BOOKMARKS) ||
+        localStorage.getItem(LEGACY_KEYS.BOOKMARKS)
       return data ? JSON.parse(data) : []
     } catch {
       return []

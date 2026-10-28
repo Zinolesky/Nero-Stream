@@ -14,7 +14,7 @@ export const Footer = () => {
               <Play className="w-4 h-4 fill-current translate-x-0.5" />
             </div>
             <span className="text-base font-black tracking-tight text-white">
-              Stream<span className="text-rose-500">Vault</span>
+              Nero <span className="text-rose-500">Stream</span>
             </span>
           </div>
           <p className="text-xs text-slate-500 leading-relaxed">
@@ -74,7 +74,7 @@ export const Footer = () => {
       </div>
 
       <div className="max-w-7xl mx-auto mt-8 pt-6 border-t border-slate-900 flex flex-col sm:flex-row items-center justify-between gap-4 text-[11px] text-slate-600">
-        <span>© {new Date().getFullYear()} StreamVault • Open Architecture Starter</span>
+        <span>© {new Date().getFullYear()} Nero Stream • Open Architecture Starter</span>
         <div className="flex items-center gap-4">
           <button onClick={openArchInfo} className="hover:text-slate-400 transition-colors">
             Architecture Specs
