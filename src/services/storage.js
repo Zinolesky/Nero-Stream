@@ -21,14 +21,19 @@ const LEGACY_KEYS = {
 export const storage = {
   getApiKey: () => {
     try {
-      return (
+      const stored =
         localStorage.getItem(STORAGE_KEYS.API_KEY) ||
-        localStorage.getItem(LEGACY_KEYS.API_KEY) ||
-        import.meta.env.VITE_TMDB_API_KEY ||
-        ''
-      )
-    } catch {
+        localStorage.getItem(LEGACY_KEYS.API_KEY)
+      if (stored && stored.trim().length > 10) {
+        return stored.trim()
+      }
+      const envKey = import.meta.env.VITE_TMDB_API_KEY
+      if (envKey && envKey.trim().length > 10) {
+        return envKey.trim()
+      }
       return ''
+    } catch {
+      return import.meta.env.VITE_TMDB_API_KEY || ''
     }
   },
 
