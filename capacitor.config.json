@@ -1,0 +1,22 @@
+{
+  "appId": "com.nerostream.app",
+  "appName": "Nero Stream",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true,
+    "allowNavigation": [
+      "https://*.vidsrc.*",
+      "https://*.vidlink.pro",
+      "https://*.embed.su",
+      "https://*.multiembed.mov",
+      "https://*.2embed.cc",
+      "https://api.themoviedb.org",
+      "https://image.tmdb.org"
+    ]
+  },
+  "android": {
+    "allowMixedContent": true,
+    "backgroundColor": "#0b0d14"
+  }
+}
