@@ -71,13 +71,17 @@ export const storage = {
 
   getSandboxMode: () => {
     try {
-      return (
+      const mode =
         localStorage.getItem(STORAGE_KEYS.SANDBOX_MODE) ||
-        localStorage.getItem(LEGACY_KEYS.SANDBOX_MODE) ||
-        'strict'
-      )
+        localStorage.getItem(LEGACY_KEYS.SANDBOX_MODE)
+      // If mode was the previous default 'strict', migrate to 'unrestricted'
+      // because embed providers block playback in sandboxed frames
+      if (mode && mode !== 'strict') {
+        return mode
+      }
+      return 'unrestricted'
     } catch {
-      return 'strict'
+      return 'unrestricted'
     }
   },
 

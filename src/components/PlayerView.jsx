@@ -20,6 +20,7 @@ import {
   RotateCw,
   Bookmark,
   BookmarkCheck,
+  AlertTriangle,
 } from 'lucide-react'
 
 export const PlayerView = () => {
@@ -37,10 +38,8 @@ export const PlayerView = () => {
   } = useApp()
 
   const [metadata, setMetadata] = useState(null)
-  const [isTheater, setIsTheater] = useState(false)
   const [iframeKey, setIframeKey] = useState(Date.now())
   const [sandboxDropdownOpen, setSandboxDropdownOpen] = useState(false)
-  const [serverDropdownOpen, setServerDropdownOpen] = useState(false)
   const iframeRef = useRef(null)
 
   const isTv = currentPlaying?.media_type === 'tv'
@@ -99,11 +98,16 @@ export const PlayerView = () => {
   }
 
   const bookmarked = isBookmarked(currentPlaying.id, currentPlaying.media_type)
+  const isSandboxed = Boolean(sandboxConfig.value)
+
+  // Check if title is unreleased
+  const releaseDateStr = currentPlaying.release_date || metadata?.release_date
+  const isFutureRelease = releaseDateStr && new Date(releaseDateStr).getTime() > Date.now()
 
   return (
     <div className="relative w-full bg-slate-950 text-slate-100 min-h-screen pb-16 animate-in fade-in duration-300">
-      {/* Player Sticky / Control Bar */}
-      <div className="sticky top-0 z-40 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-4 sm:px-8 py-3.5 flex flex-wrap items-center justify-between gap-3 shadow-xl">
+      {/* Top Header Bar */}
+      <div className="sticky top-0 z-40 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-4 sm:px-8 py-3 flex flex-wrap items-center justify-between gap-3 shadow-xl">
         <div className="flex items-center gap-3 min-w-0">
           <button
             onClick={closePlayer}
@@ -127,9 +131,8 @@ export const PlayerView = () => {
           </div>
         </div>
 
-        {/* Action Controls */}
+        {/* Right Controls */}
         <div className="flex items-center gap-2">
-          {/* TV Quick Next/Prev Episode */}
           {isTv && (
             <div className="flex items-center bg-slate-800/80 rounded-lg border border-slate-700/60 p-0.5">
               <button
@@ -153,7 +156,6 @@ export const PlayerView = () => {
             </div>
           )}
 
-          {/* Bookmark Button */}
           <button
             onClick={() => toggleBookmark(currentPlaying)}
             className={`p-2 rounded-lg border transition-colors ${
@@ -166,18 +168,16 @@ export const PlayerView = () => {
             {bookmarked ? <BookmarkCheck className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
           </button>
 
-          {/* External Link */}
           <a
             href={streamUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="p-2 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 transition-colors"
-            title="Open stream in new tab (if adblocker blocks iframe)"
+            title="Open stream in new tab"
           >
             <ExternalLink className="w-4 h-4" />
           </a>
 
-          {/* Close */}
           <button
             onClick={closePlayer}
             className="p-2 rounded-lg bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/40 transition-colors"
@@ -188,42 +188,66 @@ export const PlayerView = () => {
         </div>
       </div>
 
-      {/* Main Container */}
-      <div className={`mx-auto transition-all duration-300 px-3 sm:px-6 pt-4 ${isTheater ? 'max-w-full' : 'max-w-6xl'}`}>
-        {/* Stream Provider Switcher & Security Controls Bar */}
-        <div className="bg-slate-900 border border-slate-800/90 rounded-2xl p-3 sm:p-4 mb-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 shadow-lg">
-          {/* Server Switcher */}
-          <div className="flex items-center gap-2 flex-wrap w-full md:w-auto">
+      {/* Main Player Container */}
+      <div className="max-w-6xl mx-auto px-3 sm:px-6 pt-4 space-y-3">
+        {/* Anti-Sandbox Warning Banner if sandbox is active */}
+        {isSandboxed && (
+          <div className="bg-amber-950/80 border border-amber-500/50 rounded-xl px-4 py-2.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-200 shadow-lg">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>
+                <strong>Anti-Ad Sandbox is active:</strong> If your player displays <code className="bg-black/40 px-1 py-0.5 rounded text-amber-300">"This content can't be embedded in a sandboxed frame"</code>, turn off sandboxing to allow the provider to stream.
+              </span>
+            </div>
+            <button
+              onClick={() => updateSandboxMode('unrestricted')}
+              className="px-3 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs shrink-0 transition-colors"
+            >
+              Turn Off Sandbox (Allow Playback)
+            </button>
+          </div>
+        )}
+
+        {/* Future Release Warning */}
+        {isFutureRelease && (
+          <div className="bg-slate-900 border border-slate-800 rounded-xl px-4 py-2.5 flex items-center gap-2 text-xs text-slate-300">
+            <Info className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>
+              <strong>Note:</strong> "{currentPlaying.title || currentPlaying.name}" is scheduled for release on {releaseDateStr}. If the player displays "Video not found", third-party servers do not host pre-release titles until official release.
+            </span>
+          </div>
+        )}
+
+        {/* Server Switcher Bar */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mr-1">
               <Server className="w-3.5 h-3.5 text-rose-400" />
-              Stream Server:
+              Server:
             </span>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {PROVIDERS.map((provider, index) => {
-                const isActive = provider.id === activeProvider.id
-                return (
-                  <button
-                    key={provider.id}
-                    onClick={() => updateProviderId(provider.id)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border ${
-                      isActive
-                        ? 'bg-rose-600 text-white border-rose-500 shadow-md shadow-rose-950/40'
-                        : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800 hover:border-slate-700'
-                    }`}
-                  >
-                    <span>Server {index + 1}</span>
-                    <span className={`text-[10px] px-1 py-0.2 rounded font-mono ${isActive ? 'bg-black/30 text-rose-100' : 'bg-slate-800 text-slate-400'}`}>
-                      {provider.name}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
+            {PROVIDERS.map((provider, index) => {
+              const isActive = provider.id === activeProvider.id
+              return (
+                <button
+                  key={provider.id}
+                  onClick={() => updateProviderId(provider.id)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 border ${
+                    isActive
+                      ? 'bg-rose-600 text-white border-rose-500 shadow-md shadow-rose-950/40'
+                      : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  <span>Server {index + 1}</span>
+                  <span className={`text-[10px] px-1 py-0.2 rounded font-mono ${isActive ? 'bg-black/30 text-rose-100' : 'bg-slate-800 text-slate-400'}`}>
+                    {provider.name.split(' ')[0]}
+                  </span>
+                </button>
+              )
+            })}
           </div>
 
-          {/* Sandbox & Controls */}
-          <div className="flex items-center gap-2 flex-wrap w-full md:w-auto justify-end">
-            {/* Sandbox Mode Selector */}
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+            {/* Sandbox Toggle Dropdown */}
             <div className="relative">
               <button
                 onClick={() => setSandboxDropdownOpen(!sandboxDropdownOpen)}
@@ -231,11 +255,11 @@ export const PlayerView = () => {
                 title="Configure iframe sandboxing security mode"
               >
                 {sandboxMode === 'strict' ? (
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
                 ) : sandboxMode === 'moderate' ? (
                   <Shield className="w-3.5 h-3.5 text-amber-400" />
                 ) : (
-                  <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
+                  <Shield className="w-3.5 h-3.5 text-emerald-400" />
                 )}
                 <span>Sandbox: {sandboxConfig.name.split(' ')[0]}</span>
               </button>
@@ -243,7 +267,7 @@ export const PlayerView = () => {
               {sandboxDropdownOpen && (
                 <div className="absolute right-0 mt-2 w-72 bg-slate-900 border border-slate-700 rounded-xl p-3 shadow-2xl z-50 animate-in fade-in zoom-in-95">
                   <h4 className="text-xs font-bold text-slate-300 mb-2 pb-1 border-b border-slate-800">
-                    Ad Mitigation Sandboxing
+                    Iframe Sandboxing Security
                   </h4>
                   <div className="space-y-1.5">
                     {Object.values(SANDBOX_MODES).map((mode) => (
@@ -264,14 +288,10 @@ export const PlayerView = () => {
                       </button>
                     ))}
                   </div>
-                  <p className="text-[10px] text-slate-500 mt-2 pt-2 border-t border-slate-800 leading-tight">
-                    *Omitting allow-top-navigation prevents embed players from redirecting your parent window to ad networks.
-                  </p>
                 </div>
               )}
             </div>
 
-            {/* Refresh Player */}
             <button
               onClick={handleReloadIframe}
               className="p-1.5 text-slate-300 hover:text-white bg-slate-950 border border-slate-800 rounded-lg hover:bg-slate-800 transition-colors"
@@ -280,7 +300,6 @@ export const PlayerView = () => {
               <RotateCw className="w-4 h-4" />
             </button>
 
-            {/* Fullscreen Button */}
             <button
               onClick={handleFullscreen}
               className="p-1.5 text-slate-300 hover:text-white bg-slate-950 border border-slate-800 rounded-lg hover:bg-slate-800 transition-colors"
@@ -292,7 +311,7 @@ export const PlayerView = () => {
         </div>
 
         {/* Embedded Iframe Player Box */}
-        <div className="relative w-full aspect-video bg-black rounded-2xl overflow-hidden border border-slate-800/80 shadow-2xl shadow-black/80">
+        <div className="relative w-full aspect-video bg-black rounded-2xl overflow-hidden border border-slate-800 shadow-2xl shadow-black/80">
           <iframe
             key={`${currentPlaying.id}-${currentSeason}-${currentEpisode}-${activeProvider.id}-${sandboxMode}-${iframeKey}`}
             ref={iframeRef}
@@ -300,20 +319,20 @@ export const PlayerView = () => {
             title={currentPlaying.title || currentPlaying.name}
             className="w-full h-full border-0"
             allowFullScreen
-            allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
             referrerPolicy="origin"
             {...(sandboxConfig.value ? { sandbox: sandboxConfig.value } : {})}
           />
         </div>
 
-        {/* Helpful Tip for Streams & Popups */}
-        <div className="flex items-center justify-between text-xs text-slate-400 mt-2 px-1">
+        {/* Helpful Tip */}
+        <div className="flex items-center justify-between text-xs text-slate-400 px-1 pt-1">
           <div className="flex items-center gap-1.5">
             <Info className="w-3.5 h-3.5 text-rose-400 shrink-0" />
             <span>
-              If a server is buffering or displays a playback notice, switch to{' '}
-              <strong className="text-slate-200">Server 2 (VidLink)</strong> or{' '}
-              <strong className="text-slate-200">Server 3 (Embed.su)</strong>.
+              If Server 1 buffers or displays an error, switch to{' '}
+              <strong className="text-slate-200">Server 2 (VidSrc TO)</strong> or{' '}
+              <strong className="text-slate-200">Server 3 (VidSrc PM)</strong>.
             </span>
           </div>
           <span className="hidden sm:inline font-mono text-[11px] text-slate-500">
@@ -338,7 +357,6 @@ export const PlayerView = () => {
         {/* Metadata & Title Details */}
         <div className="mt-8 bg-slate-900/60 border border-slate-800/80 rounded-2xl p-6 backdrop-blur-sm">
           <div className="flex flex-col md:flex-row gap-6">
-            {/* Poster Thumbnail */}
             {currentPlaying.poster_path && (
               <img
                 src={tmdb.getImageUrl(currentPlaying.poster_path, 'w300')}
@@ -373,7 +391,6 @@ export const PlayerView = () => {
                 )}
               </div>
 
-              {/* Genres */}
               {metadata?.genres && (
                 <div className="flex items-center gap-2 mt-2.5 flex-wrap">
                   {metadata.genres.map((g) => (
@@ -387,12 +404,10 @@ export const PlayerView = () => {
                 </div>
               )}
 
-              {/* Overview */}
               <p className="text-sm sm:text-base text-slate-300 mt-4 leading-relaxed max-w-4xl">
                 {metadata?.overview || currentPlaying.overview || 'No overview provided.'}
               </p>
 
-              {/* Cast & Crew if available */}
               {metadata?.credits?.cast && metadata.credits.cast.length > 0 && (
                 <div className="mt-4 pt-4 border-t border-slate-800/80">
                   <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
