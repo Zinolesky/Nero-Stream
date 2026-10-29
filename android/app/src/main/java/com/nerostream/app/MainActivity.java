@@ -1,20 +1,21 @@
 package com.nerostream.app;
 
+import android.app.Activity;
+import android.content.Context;
 import android.content.pm.ActivityInfo;
+import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Message;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
-import androidx.webkit.WebViewCompat;
-import androidx.webkit.WebViewFeature;
-import java.util.Collections;
-import java.util.HashSet;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebChromeClient;
 import com.getcapacitor.BridgeWebViewClient;
@@ -24,6 +25,63 @@ public class MainActivity extends BridgeActivity {
 
     private View customView;
     private WebChromeClient.CustomViewCallback customViewCallback;
+
+    /**
+     * Native Hardware Media Bridge
+     * Gives the webview direct control over real Android hardware volume and screen brightness
+     */
+    public class NativeMediaBridge {
+        private final Activity activity;
+        private final AudioManager audioManager;
+
+        public NativeMediaBridge(Activity activity) {
+            this.activity = activity;
+            this.audioManager = (AudioManager) activity.getSystemService(Context.AUDIO_SERVICE);
+        }
+
+        @JavascriptInterface
+        public void adjustVolume(int direction) {
+            if (audioManager != null) {
+                int dir = direction > 0 ? AudioManager.ADJUST_RAISE : AudioManager.ADJUST_LOWER;
+                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, dir, AudioManager.FLAG_SHOW_UI);
+                Log.d(TAG, "Hardware volume adjusted: " + (direction > 0 ? "UP" : "DOWN"));
+            }
+        }
+
+        @JavascriptInterface
+        public void setVolume(int percentage) {
+            if (audioManager != null) {
+                int maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                int targetVol = Math.round((Math.max(0, Math.min(100, percentage)) / 100.0f) * maxVol);
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, AudioManager.FLAG_SHOW_UI);
+                Log.d(TAG, "Hardware volume set to: " + targetVol + "/" + maxVol);
+            }
+        }
+
+        @JavascriptInterface
+        public int getVolume() {
+            if (audioManager != null) {
+                int maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                int currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+                return maxVol > 0 ? Math.round(((float) currentVol / maxVol) * 100) : 50;
+            }
+            return 50;
+        }
+
+        @JavascriptInterface
+        public void setScreenBrightness(float brightness) {
+            activity.runOnUiThread(() -> {
+                try {
+                    WindowManager.LayoutParams lp = activity.getWindow().getAttributes();
+                    lp.screenBrightness = Math.max(0.05f, Math.min(1.0f, brightness));
+                    activity.getWindow().setAttributes(lp);
+                    Log.d(TAG, "Hardware screen brightness set to: " + brightness);
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to set screen brightness: " + e.getMessage());
+                }
+            });
+        }
+    }
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -46,39 +104,9 @@ public class MainActivity extends BridgeActivity {
                 settings.setMediaPlaybackRequiresUserGesture(false);
                 settings.setDomStorageEnabled(true);
 
-                // Inject cross-frame media controller script into all frames (including cross-origin iframes)
-                try {
-                    if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                        String speedScript = "(function() {" +
-                            "window.addEventListener('message', function(event) {" +
-                            "    try {" +
-                            "        if (!event.data) return;" +
-                            "        var videos = document.querySelectorAll('video');" +
-                            "        for (var i = 0; i < videos.length; i++) {" +
-                            "            var v = videos[i];" +
-                            "            if (event.data.type === 'NERO_SPEED' || event.data.type === 'SET_PLAYBACK_RATE') {" +
-                            "                v.playbackRate = event.data.rate || 1.0;" +
-                            "            } else if (event.data.type === 'NERO_SEEK') {" +
-                            "                if (typeof event.data.time === 'number') v.currentTime = event.data.time;" +
-                            "                else if (typeof event.data.delta === 'number') v.currentTime = Math.max(0, v.currentTime + event.data.delta);" +
-                            "            } else if (event.data.type === 'NERO_TOGGLE_PLAY') {" +
-                            "                if (v.paused) v.play(); else v.pause();" +
-                            "            }" +
-                            "        }" +
-                            "    } catch (e) {}" +
-                            "});" +
-                            "})();";
-
-                        WebViewCompat.addDocumentStartJavaScript(
-                            webView,
-                            speedScript,
-                            new HashSet<>(Collections.singletonList("*"))
-                        );
-                        Log.i(TAG, "Cross-frame media controller script injected via WebViewCompat.");
-                    }
-                } catch (Exception scriptEx) {
-                    Log.w(TAG, "Could not inject speed script: " + scriptEx.getMessage());
-                }
+                // Attach Hardware Volume & Brightness Bridge
+                webView.addJavascriptInterface(new NativeMediaBridge(this), "AndroidMediaBridge");
+                Log.i(TAG, "Attached AndroidMediaBridge to WebView.");
 
                 // Configure WebChromeClient with popup blocking AND native Fullscreen Landscape handling
                 webView.setWebChromeClient(new BridgeWebChromeClient(getBridge()) {

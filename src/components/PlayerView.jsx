@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
+import { Capacitor } from '@capacitor/core'
 import { useApp } from '../context/AppContext'
 import { PROVIDERS, SANDBOX_MODES } from '../services/providers'
 import { tmdb } from '../services/tmdb'
@@ -18,7 +19,6 @@ import {
   Star,
   Info,
   RotateCw,
-  RotateCcw,
   Bookmark,
   BookmarkCheck,
   AlertTriangle,
@@ -26,10 +26,7 @@ import {
   Sun,
   Volume2,
   VolumeX,
-  Play,
-  Pause,
-  Sliders,
-  FastForward,
+  Volume1,
 } from 'lucide-react'
 
 export const PlayerView = () => {
@@ -54,25 +51,14 @@ export const PlayerView = () => {
   const [startAtOverride, setStartAtOverride] = useState(null)
   const [showResumeBanner, setShowResumeBanner] = useState(true)
 
-  // Gesture & Playback State
+  // Hardware Media & Display Controls (Supported on Android and Web)
   const [brightness, setBrightness] = useState(1.0) // 0.25 to 1.5
-  const [volume, setVolume] = useState(100) // 0 to 100
-  const [playbackSpeed, setPlaybackSpeed] = useState(1.0) // 1.0, 1.25, 1.5, 2.0
-  const [isFastForwarding, setIsFastForwarding] = useState(false) // Hold for 2x speed active
-  const [currentPlaybackTime, setCurrentPlaybackTime] = useState(0)
-  const [totalDuration, setTotalDuration] = useState(0)
-  const [hudState, setHudState] = useState(null) // { type, value, label }
-  const [gesturesEnabled, setGesturesEnabled] = useState(true)
+  const [volumeLevel, setVolumeLevel] = useState(70) // 0 to 100
 
   const playerContainerRef = useRef(null)
   const iframeRef = useRef(null)
-  const hudTimerRef = useRef(null)
-  const holdTimerRef = useRef(null)
 
-  // Touch tracking refs
-  const touchStartRef = useRef({ x: 0, y: 0, time: 0, side: 'left', initialBrightness: 1.0, initialVolume: 100 })
-  const lastTapRef = useRef({ time: 0, x: 0, y: 0, side: null })
-
+  const isNative = Capacitor.isNativePlatform()
   const isTv = currentPlaying?.media_type === 'tv'
   const currentSeason = currentPlaying?.season || 1
   const currentEpisode = currentPlaying?.episode || 1
@@ -82,6 +68,20 @@ export const PlayerView = () => {
     startAtOverride !== null
       ? startAtOverride
       : (currentPlaying?.startAt && currentPlaying.startAt > 15 ? currentPlaying.startAt : 0)
+
+  // Fetch initial native Android hardware volume if available
+  useEffect(() => {
+    if (window.AndroidMediaBridge?.getVolume) {
+      try {
+        const nativeVol = window.AndroidMediaBridge.getVolume()
+        if (typeof nativeVol === 'number' && nativeVol >= 0) {
+          setVolumeLevel(nativeVol)
+        }
+      } catch (e) {
+        console.warn('Could not read native Android volume', e)
+      }
+    }
+  }, [])
 
   // Fetch full TMDB metadata (cast, seasons, genres, runtimes)
   useEffect(() => {
@@ -111,12 +111,8 @@ export const PlayerView = () => {
           if (event.data.type === 'PLAYER_EVENT' && event.data.data) {
             const { currentTime, duration } = event.data.data
             if (typeof currentTime === 'number' && !isNaN(currentTime)) {
-              setCurrentPlaybackTime(currentTime)
-              if (typeof duration === 'number' && duration > 0) {
-                setTotalDuration(duration)
-              }
               if (updatePlaybackProgress) {
-                updatePlaybackProgress(currentTime, duration || totalDuration)
+                updatePlaybackProgress(currentTime, duration || 0)
               }
             }
           }
@@ -130,7 +126,7 @@ export const PlayerView = () => {
     return () => {
       window.removeEventListener('message', handleMessage)
     }
-  }, [updatePlaybackProgress, totalDuration])
+  }, [updatePlaybackProgress])
 
   // Monitor document fullscreen state changes
   useEffect(() => {
@@ -173,54 +169,33 @@ export const PlayerView = () => {
     }
   }
 
-  // Display temporary gesture HUD
-  const triggerHud = (type, value, label) => {
-    if (hudTimerRef.current) clearTimeout(hudTimerRef.current)
-    setHudState({ type, value, label })
-    hudTimerRef.current = setTimeout(() => {
-      setHudState(null)
-    }, 1200)
-  }
+  // Hardware Volume Controls (Directly alters Android AudioManager volume on device)
+  const handleVolumeAdjust = (direction) => {
+    const step = direction > 0 ? 10 : -10
+    const newVol = Math.max(0, Math.min(100, volumeLevel + step))
+    setVolumeLevel(newVol)
 
-  // Dispatch speed commands to player iframe
-  const sendSpeedCommand = (rate) => {
-    if (iframeRef.current?.contentWindow) {
-      try {
-        iframeRef.current.contentWindow.postMessage({ type: 'NERO_SPEED', rate }, '*')
-        iframeRef.current.contentWindow.postMessage({ type: 'SET_PLAYBACK_RATE', rate }, '*')
-        iframeRef.current.contentWindow.postMessage({ event: 'setPlaybackRate', value: rate }, '*')
-        iframeRef.current.contentWindow.postMessage({ api: 'setSpeed', value: rate }, '*')
-      } catch (e) {}
+    if (window.AndroidMediaBridge?.adjustVolume) {
+      // Calls native Android AudioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, ...)
+      window.AndroidMediaBridge.adjustVolume(direction > 0 ? 1 : -1)
     }
   }
 
-  // Start Hold for 2x Speed
-  const startFastForward = () => {
-    setIsFastForwarding(true)
-    sendSpeedCommand(2.0)
-    if (navigator.vibrate) {
-      try {
-        navigator.vibrate(40)
-      } catch (e) {}
+  const handleVolumeSet = (val) => {
+    setVolumeLevel(val)
+    if (window.AndroidMediaBridge?.setVolume) {
+      window.AndroidMediaBridge.setVolume(val)
     }
   }
 
-  // Stop Hold for 2x Speed
-  const stopFastForward = () => {
-    setIsFastForwarding(false)
-    sendSpeedCommand(playbackSpeed)
-    if (navigator.vibrate) {
-      try {
-        navigator.vibrate(20)
-      } catch (e) {}
+  // Brightness Control (CSS Filter + Native Android screen brightness)
+  const handleBrightnessChange = (val) => {
+    setBrightness(val)
+    if (window.AndroidMediaBridge?.setScreenBrightness) {
+      // Maps 0.25 - 1.5 range to Android screen brightness (0.05 to 1.0)
+      const mapped = Math.max(0.05, Math.min(1.0, (val - 0.25) / 1.25))
+      window.AndroidMediaBridge.setScreenBrightness(mapped)
     }
-  }
-
-  // Change manual base speed (1x, 1.25x, 1.5x, 2x)
-  const handleSetSpeed = (rate) => {
-    setPlaybackSpeed(rate)
-    sendSpeedCommand(rate)
-    triggerHud('speed', rate, `${rate}x Speed`)
   }
 
   // Single dedicated Fullscreen & Landscape button
@@ -263,159 +238,14 @@ export const PlayerView = () => {
     }
   }
 
-  // Quick Seek (-10s / +10s)
-  const handleSeek = (deltaSeconds) => {
-    const baseTime = currentPlaybackTime || effectiveStartAt || 0
-    const newTime = Math.max(0, Math.floor(baseTime + deltaSeconds))
-    setCurrentPlaybackTime(newTime)
-
-    // Trigger visual HUD
-    if (deltaSeconds < 0) {
-      triggerHud('seek-back', null, '-10s')
-    } else {
-      triggerHud('seek-forward', null, '+10s')
-    }
-
-    // Notify iframe via postMessage
-    if (iframeRef.current?.contentWindow) {
-      try {
-        iframeRef.current.contentWindow.postMessage({ type: 'NERO_SEEK', delta: deltaSeconds, time: newTime }, '*')
-        iframeRef.current.contentWindow.postMessage({ type: 'SEEK', time: newTime }, '*')
-        iframeRef.current.contentWindow.postMessage({ event: 'seek', value: newTime }, '*')
-        iframeRef.current.contentWindow.postMessage({ api: 'seek', value: newTime }, '*')
-      } catch (e) {
-        console.warn('Could not postMessage seek to iframe', e)
-      }
-    }
-
-    if (updatePlaybackProgress) {
-      updatePlaybackProgress(newTime, totalDuration)
-    }
-  }
-
   // Netflix-style Restart From Beginning
   const handleRestartFromBeginning = () => {
     setStartAtOverride(0)
-    setCurrentPlaybackTime(0)
     setShowResumeBanner(false)
     if (updatePlaybackProgress) {
-      updatePlaybackProgress(0, totalDuration)
+      updatePlaybackProgress(0, 0)
     }
     setIframeKey(Date.now())
-  }
-
-  // Zone-specific touch handlers: 'left' | 'right' | 'top'
-  const handleZoneTouchStart = (e, zone) => {
-    if (!gesturesEnabled) return
-    const touch = e.touches[0]
-    const rect = playerContainerRef.current?.getBoundingClientRect() || e.currentTarget.getBoundingClientRect()
-    const x = touch.clientX - rect.left
-    const y = touch.clientY - rect.top
-    const now = Date.now()
-
-    touchStartRef.current = {
-      x,
-      y,
-      time: now,
-      side: zone,
-      initialBrightness: brightness,
-      initialVolume: volume,
-    }
-
-    // HOLD FOR 2X SPEED: Trigger if held in place for > 350ms
-    if (holdTimerRef.current) clearTimeout(holdTimerRef.current)
-    holdTimerRef.current = setTimeout(() => {
-      startFastForward()
-    }, 350)
-
-    // Check double-tap on side zones
-    if (zone === 'left' || zone === 'right') {
-      const prev = lastTapRef.current
-      if (now - prev.time < 350 && prev.side === zone && Math.abs(x - prev.x) < 55 && Math.abs(y - prev.y) < 55) {
-        if (holdTimerRef.current) {
-          clearTimeout(holdTimerRef.current)
-          holdTimerRef.current = null
-        }
-        if (zone === 'left') {
-          handleSeek(-10)
-        } else {
-          handleSeek(10)
-        }
-        lastTapRef.current = { time: 0, x: 0, y: 0, side: null }
-      } else {
-        lastTapRef.current = { time: now, x, y, side: zone }
-      }
-    }
-  }
-
-  const handleZoneTouchMove = (e, zone) => {
-    if (!gesturesEnabled) return
-    const touch = e.touches[0]
-    const rect = playerContainerRef.current?.getBoundingClientRect() || e.currentTarget.getBoundingClientRect()
-    const currentX = touch.clientX - rect.left
-    const currentY = touch.clientY - rect.top
-    const deltaX = Math.abs(currentX - touchStartRef.current.x)
-    const deltaY = touchStartRef.current.y - currentY // Up is positive
-
-    if (deltaX > 10 || Math.abs(deltaY) > 10) {
-      if (holdTimerRef.current) {
-        clearTimeout(holdTimerRef.current)
-        holdTimerRef.current = null
-      }
-      if (isFastForwarding) {
-        stopFastForward()
-      }
-    }
-
-    // Threshold to prevent minor tap jitter from sliding
-    if (Math.abs(deltaY) > 8) {
-      if (zone === 'left') {
-        const step = deltaY / (rect.height * 0.8)
-        const newBrightness = Math.min(1.5, Math.max(0.25, touchStartRef.current.initialBrightness + step))
-        setBrightness(newBrightness)
-        triggerHud('brightness', Math.round((newBrightness / 1.5) * 100), `${Math.round(newBrightness * 100)}%`)
-      } else if (zone === 'right') {
-        const step = (deltaY / (rect.height * 0.8)) * 100
-        const newVol = Math.min(100, Math.max(0, Math.round(touchStartRef.current.initialVolume + step)))
-        setVolume(newVol)
-        triggerHud('volume', newVol, `${newVol}%`)
-
-        if (iframeRef.current?.contentWindow) {
-          try {
-            iframeRef.current.contentWindow.postMessage({ type: 'SET_VOLUME', volume: newVol / 100 }, '*')
-            iframeRef.current.contentWindow.postMessage({ event: 'setVolume', value: newVol / 100 }, '*')
-          } catch (err) {}
-        }
-      }
-    }
-  }
-
-  const handleZoneTouchEnd = () => {
-    if (holdTimerRef.current) {
-      clearTimeout(holdTimerRef.current)
-      holdTimerRef.current = null
-    }
-    if (isFastForwarding) {
-      stopFastForward()
-    }
-  }
-
-  const handleZoneMouseDown = (zone) => {
-    if (!gesturesEnabled) return
-    if (holdTimerRef.current) clearTimeout(holdTimerRef.current)
-    holdTimerRef.current = setTimeout(() => {
-      startFastForward()
-    }, 350)
-  }
-
-  const handleZoneMouseUp = () => {
-    if (holdTimerRef.current) {
-      clearTimeout(holdTimerRef.current)
-      holdTimerRef.current = null
-    }
-    if (isFastForwarding) {
-      stopFastForward()
-    }
   }
 
   const formatSeconds = (sec) => {
@@ -582,20 +412,6 @@ export const PlayerView = () => {
 
           {/* Quick Actions: Sandbox, Reload, and Single Fullscreen Landscape Button */}
           <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap">
-            {/* Gesture Mode Pill Toggle */}
-            <button
-              onClick={() => setGesturesEnabled(!gesturesEnabled)}
-              className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border transition-colors ${
-                gesturesEnabled
-                  ? 'bg-emerald-950/50 border-emerald-500/50 text-emerald-300'
-                  : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
-              }`}
-              title={gesturesEnabled ? 'Gestures Active: Swipe side zones for Brightness & Volume, Double-tap sides to Skip 10s' : 'Gestures Disabled: Direct touch mode'}
-            >
-              <Sliders className="w-3.5 h-3.5" />
-              <span className="text-[11px] font-semibold">{gesturesEnabled ? 'Gestures: ON' : 'Gestures: OFF'}</span>
-            </button>
-
             {/* Sandbox Dropdown */}
             <div className="relative">
               <button
@@ -660,16 +476,16 @@ export const PlayerView = () => {
           </div>
         </div>
 
-        {/* Embedded Iframe Player Box with Smart Gesture Zones */}
+        {/* Embedded Iframe Player Box (100% UNOBSTRUCTED: Direct native touch & mouse interaction) */}
         <div
           ref={playerContainerRef}
-          className={`relative w-full aspect-video bg-black rounded-2xl overflow-hidden border border-slate-800 shadow-2xl shadow-black/80 transition-all select-none ${
+          className={`relative w-full aspect-video bg-black rounded-2xl overflow-hidden border border-slate-800 shadow-2xl shadow-black/80 transition-all ${
             isFullscreen ? 'fixed inset-0 z-50 rounded-none border-0 aspect-auto w-screen h-screen' : ''
           }`}
         >
           {/* Netflix-Style Resume Banner */}
           {showResumeBanner && effectiveStartAt > 15 && (
-            <div className="absolute top-3 left-3 right-3 sm:left-4 sm:right-auto z-30 bg-slate-900/95 backdrop-blur-md border border-rose-500/60 rounded-xl px-3.5 py-2 flex items-center gap-3 shadow-2xl animate-in slide-in-from-top-2 duration-300 max-w-md">
+            <div className="absolute top-3 left-3 right-3 sm:left-4 sm:right-auto z-30 bg-slate-900/95 backdrop-blur-md border border-rose-500/60 rounded-xl px-3.5 py-2 flex items-center gap-3 shadow-2xl animate-in slide-in-from-top-2 duration-300 max-w-md pointer-events-auto">
               <Clock className="w-4 h-4 text-rose-500 shrink-0" />
               <div className="text-xs min-w-0">
                 <span className="text-slate-300">Resumed from </span>
@@ -691,26 +507,9 @@ export const PlayerView = () => {
             </div>
           )}
 
-          {/* HOLD FOR 2X SPEED HUD BADGE (Floating Top Center, YouTube/TikTok style) */}
-          {isFastForwarding && (
-            <div className="absolute top-4 inset-x-0 mx-auto w-fit z-40 bg-slate-900/95 backdrop-blur-md border border-rose-500/80 rounded-full px-5 py-2 flex items-center gap-2.5 shadow-2xl shadow-rose-950/50 animate-in zoom-in-95 duration-150">
-              <FastForward className="w-5 h-5 text-rose-500 animate-pulse fill-current" />
-              <span className="text-xs sm:text-sm font-extrabold text-white tracking-wider font-mono">
-                2X SPEED &gt;&gt;
-              </span>
-            </div>
-          )}
-
           {/* Floating Exit Fullscreen Button (Shown in Fullscreen mode) */}
           {isFullscreen && (
-            <div className="absolute top-3 right-3 z-30 flex items-center gap-2">
-              <button
-                onClick={() => setGesturesEnabled(!gesturesEnabled)}
-                className="px-2.5 py-1 rounded-lg bg-black/70 backdrop-blur-md text-white border border-white/20 text-xs font-semibold flex items-center gap-1.5"
-              >
-                <Sliders className="w-3.5 h-3.5 text-rose-400" />
-                <span>{gesturesEnabled ? 'Gestures Active' : 'Direct Touch'}</span>
-              </button>
+            <div className="absolute top-3 right-3 z-30 flex items-center gap-2 pointer-events-auto">
               <button
                 onClick={toggleFullscreenLandscape}
                 className="p-2 rounded-lg bg-black/70 backdrop-blur-md text-white border border-white/20 hover:bg-black/90 transition-colors"
@@ -721,7 +520,7 @@ export const PlayerView = () => {
             </div>
           )}
 
-          {/* Video Iframe with Brightness filter */}
+          {/* Pure Video Iframe: NO BLOCKING OVERLAYS WHATSOEVER */}
           <iframe
             key={`${currentPlaying.id}-${currentSeason}-${currentEpisode}-${activeProvider.id}-${sandboxMode}-${iframeKey}-${effectiveStartAt}`}
             ref={iframeRef}
@@ -734,191 +533,59 @@ export const PlayerView = () => {
             referrerPolicy="origin"
             {...(sandboxConfig.value ? { sandbox: sandboxConfig.value } : {})}
           />
-
-          {/* Gesture Controls Zones (Smart layout: Leaves bottom 24% and center area COMPLETELY open for native buttons & play/pause) */}
-          {gesturesEnabled && (
-            <div className="absolute inset-0 pointer-events-none z-20 overflow-hidden">
-              {/* Left Zone: Brightness, -10s double tap, hold for 2x speed (leaves bottom 24% free for controls) */}
-              <div
-                onTouchStart={(e) => handleZoneTouchStart(e, 'left')}
-                onTouchMove={(e) => handleZoneTouchMove(e, 'left')}
-                onTouchEnd={handleZoneTouchEnd}
-                onTouchCancel={handleZoneTouchEnd}
-                onMouseDown={() => handleZoneMouseDown('left')}
-                onMouseUp={handleZoneMouseUp}
-                onMouseLeave={handleZoneMouseUp}
-                className="absolute left-0 top-0 bottom-24 w-[28%] pointer-events-auto flex items-center justify-start pl-3 sm:pl-4 group cursor-pointer"
-                title="Left Zone: Swipe for Brightness | Double-tap for -10s | Hold for 2x Speed"
-              >
-                <div className="p-2 sm:p-2.5 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 opacity-0 group-hover:opacity-75 transition-opacity pointer-events-none">
-                  <RotateCcw className="w-4 sm:w-5 h-4 sm:h-5 text-white/90" />
-                </div>
-              </div>
-
-              {/* Right Zone: Volume, +10s double tap, hold for 2x speed (leaves bottom 24% free for controls) */}
-              <div
-                onTouchStart={(e) => handleZoneTouchStart(e, 'right')}
-                onTouchMove={(e) => handleZoneTouchMove(e, 'right')}
-                onTouchEnd={handleZoneTouchEnd}
-                onTouchCancel={handleZoneTouchEnd}
-                onMouseDown={() => handleZoneMouseDown('right')}
-                onMouseUp={handleZoneMouseUp}
-                onMouseLeave={handleZoneMouseUp}
-                className="absolute right-0 top-0 bottom-24 w-[28%] pointer-events-auto flex items-center justify-end pr-3 sm:pr-4 group cursor-pointer"
-                title="Right Zone: Swipe for Volume | Double-tap for +10s | Hold for 2x Speed"
-              >
-                <div className="p-2 sm:p-2.5 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 opacity-0 group-hover:opacity-75 transition-opacity pointer-events-none">
-                  <RotateCw className="w-4 sm:w-5 h-4 sm:h-5 text-white/90" />
-                </div>
-              </div>
-
-              {/* Top Bar Zone: Hold for 2x speed along top edge without blocking center play button */}
-              <div
-                onTouchStart={(e) => handleZoneTouchStart(e, 'top')}
-                onTouchMove={(e) => handleZoneTouchMove(e, 'top')}
-                onTouchEnd={handleZoneTouchEnd}
-                onTouchCancel={handleZoneTouchEnd}
-                onMouseDown={() => handleZoneMouseDown('top')}
-                onMouseUp={handleZoneMouseUp}
-                onMouseLeave={handleZoneMouseUp}
-                className="absolute left-[28%] right-[28%] top-0 h-14 pointer-events-auto flex items-center justify-center cursor-pointer"
-                title="Top Zone: Hold for 2x Speed"
-              />
-            </div>
-          )}
-
-          {/* Gesture Visual HUD Feedback */}
-          {hudState && (
-            <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center animate-in zoom-in-90 fade-in duration-150">
-              {/* Speed HUD */}
-              {hudState.type === 'speed' && (
-                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-2xl p-4 flex flex-col items-center gap-2 shadow-2xl text-white">
-                  <FastForward className="w-8 h-8 text-rose-400 animate-pulse" />
-                  <span className="text-sm font-mono font-bold text-rose-300">
-                    {hudState.label}
-                  </span>
-                </div>
-              )}
-
-              {/* Brightness HUD (Left side indicator) */}
-              {hudState.type === 'brightness' && (
-                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-2xl p-4 flex flex-col items-center gap-2 shadow-2xl text-white">
-                  <Sun className="w-8 h-8 text-amber-400 animate-pulse" />
-                  <div className="w-24 h-2 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
-                    <div
-                      className="h-full bg-amber-400 transition-all duration-100"
-                      style={{ width: `${Math.min(100, Math.max(0, (brightness / 1.5) * 100))}%` }}
-                    />
-                  </div>
-                  <span className="text-xs font-mono font-bold text-amber-300">
-                    Brightness {hudState.label}
-                  </span>
-                </div>
-              )}
-
-              {/* Volume HUD (Right side indicator) */}
-              {hudState.type === 'volume' && (
-                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-2xl p-4 flex flex-col items-center gap-2 shadow-2xl text-white">
-                  {volume === 0 ? (
-                    <VolumeX className="w-8 h-8 text-rose-400" />
-                  ) : (
-                    <Volume2 className="w-8 h-8 text-rose-400 animate-pulse" />
-                  )}
-                  <div className="w-24 h-2 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
-                    <div
-                      className="h-full bg-rose-500 transition-all duration-100"
-                      style={{ width: `${volume}%` }}
-                    />
-                  </div>
-                  <span className="text-xs font-mono font-bold text-rose-300">
-                    Volume {hudState.label}
-                  </span>
-                </div>
-              )}
-
-              {/* -10s Seek HUD */}
-              {hudState.type === 'seek-back' && (
-                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-full p-5 flex flex-col items-center gap-1 shadow-2xl text-white">
-                  <RotateCcw className="w-10 h-10 text-rose-500 animate-spin" />
-                  <span className="text-sm font-bold font-mono text-rose-300">-10s</span>
-                </div>
-              )}
-
-              {/* +10s Seek HUD */}
-              {hudState.type === 'seek-forward' && (
-                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-full p-5 flex flex-col items-center gap-1 shadow-2xl text-white">
-                  <RotateCw className="w-10 h-10 text-rose-500 animate-spin" />
-                  <span className="text-sm font-bold font-mono text-rose-300">+10s</span>
-                </div>
-              )}
-
-              {/* Play / Pause HUD */}
-              {hudState.type === 'play-pause' && (
-                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-full p-5 shadow-2xl text-white">
-                  <Play className="w-10 h-10 text-rose-500 fill-current animate-pulse" />
-                </div>
-              )}
-            </div>
-          )}
         </div>
 
-        {/* Quick Gesture & Control Buttons Bar (Desktop & Touch Friendly) */}
-        <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/70 border border-slate-800/80 rounded-xl px-3 py-2 text-xs text-slate-300">
-          {/* Quick Seek */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-slate-400 font-medium">Seek:</span>
+        {/* Hardware Volume & Display Control Bar */}
+        <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/80 border border-slate-800/80 rounded-xl px-4 py-2.5 text-xs text-slate-300 shadow-md">
+          {/* Real Device Volume (Native Android AudioManager & Web) */}
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => handleSeek(-10)}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-mono transition-colors"
-              title="Rewind 10 seconds"
+              onClick={() => handleVolumeAdjust(-1)}
+              className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+              title="Lower Volume"
             >
-              <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
-              <span>-10s</span>
+              {volumeLevel === 0 ? <VolumeX className="w-3.5 h-3.5 text-rose-400" /> : <Volume1 className="w-3.5 h-3.5 text-slate-400" />}
             </button>
+
+            <span className="text-slate-400 font-medium text-xs">
+              {isNative ? 'Device Volume:' : 'Volume:'}
+            </span>
+
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="5"
+              value={volumeLevel}
+              onChange={(e) => handleVolumeSet(parseInt(e.target.value, 10))}
+              className="w-20 sm:w-28 accent-rose-500 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
+              title={`Volume: ${volumeLevel}%`}
+            />
+
             <button
-              onClick={() => handleSeek(10)}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-mono transition-colors"
-              title="Skip forward 10 seconds"
+              onClick={() => handleVolumeAdjust(1)}
+              className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+              title="Raise Volume"
             >
-              <RotateCw className="w-3.5 h-3.5 text-rose-400" />
-              <span>+10s</span>
+              <Volume2 className="w-3.5 h-3.5 text-rose-400" />
             </button>
+
+            <span className="font-mono text-[11px] text-rose-300 w-8 text-right">
+              {volumeLevel}%
+            </span>
           </div>
 
-          {/* Quick Speed Pills */}
-          <div className="flex items-center gap-1.5">
-            <FastForward className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-            <span className="text-slate-400 font-medium">Speed:</span>
-            {[1.0, 1.25, 1.5, 2.0].map((rate) => (
-              <button
-                key={rate}
-                onClick={() => handleSetSpeed(rate)}
-                className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold transition-all border ${
-                  playbackSpeed === rate && !isFastForwarding
-                    ? 'bg-rose-600 text-white border-rose-500 shadow-sm'
-                    : 'bg-slate-800/90 text-slate-300 border-slate-700/80 hover:bg-slate-750 hover:text-white'
-                }`}
-                title={`Set playback speed to ${rate}x`}
-              >
-                {rate}x
-              </button>
-            ))}
-          </div>
-
-          {/* Quick Brightness Slider */}
+          {/* Real Brightness Slider (Container & Android Screen Brightness) */}
           <div className="flex items-center gap-2">
             <Sun className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <span className="text-slate-400 font-medium text-xs">Brightness:</span>
             <input
               type="range"
               min="0.25"
               max="1.5"
               step="0.05"
               value={brightness}
-              onChange={(e) => {
-                const val = parseFloat(e.target.value)
-                setBrightness(val)
-                triggerHud('brightness', Math.round((val / 1.5) * 100), `${Math.round(val * 100)}%`)
-              }}
+              onChange={(e) => handleBrightnessChange(parseFloat(e.target.value))}
               className="w-20 sm:w-28 accent-amber-400 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
               title={`Brightness: ${Math.round(brightness * 100)}%`}
             />
@@ -927,9 +594,9 @@ export const PlayerView = () => {
             </span>
           </div>
 
-          <div className="hidden lg:flex items-center gap-1.5 text-slate-400 text-[11px]">
+          <div className="hidden md:flex items-center gap-1.5 text-slate-400 text-[11px]">
             <Info className="w-3 h-3 text-rose-400" />
-            <span>Tap middle to Play/Pause • Tap bottom bar for all player controls • Side zones for Brightness & Volume.</span>
+            <span>Use on-screen player controls for instant play, pause, 10s skip, subtitles, and speed.</span>
           </div>
         </div>
 
