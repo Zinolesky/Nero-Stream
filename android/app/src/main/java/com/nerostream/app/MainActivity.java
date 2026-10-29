@@ -1,9 +1,13 @@
 package com.nerostream.app;
 
+import android.content.pm.ActivityInfo;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Message;
 import android.util.Log;
+import android.view.View;
+import android.view.ViewGroup;
+import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -13,6 +17,9 @@ import com.getcapacitor.BridgeWebViewClient;
 
 public class MainActivity extends BridgeActivity {
     private static final String TAG = "NeroStreamGuards";
+
+    private View customView;
+    private WebChromeClient.CustomViewCallback customViewCallback;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
@@ -35,12 +42,57 @@ public class MainActivity extends BridgeActivity {
                 settings.setMediaPlaybackRequiresUserGesture(false);
                 settings.setDomStorageEnabled(true);
 
-                // Intercept any window.open() popup requests from iframe ads
+                // Configure WebChromeClient with popup blocking AND native Fullscreen Landscape handling
                 webView.setWebChromeClient(new BridgeWebChromeClient(getBridge()) {
                     @Override
                     public boolean onCreateWindow(WebView view, boolean isDialog, boolean isUserGesture, Message resultMsg) {
                         Log.w(TAG, "Suppressed onCreateWindow popup request");
                         return false; // Blocks opening new windows/popups
+                    }
+
+                    @Override
+                    public void onShowCustomView(View view, WebChromeClient.CustomViewCallback callback) {
+                        if (customView != null) {
+                            onHideCustomView();
+                            return;
+                        }
+
+                        customView = view;
+                        customViewCallback = callback;
+
+                        // Rotate to Landscape for optimal full-screen viewing
+                        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+
+                        // Immersive sticky fullscreen hiding status and navigation bars
+                        getWindow().getDecorView().setSystemUiVisibility(
+                            View.SYSTEM_UI_FLAG_FULLSCREEN
+                            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                            | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        );
+
+                        // Attach full screen video view
+                        ViewGroup decor = (ViewGroup) getWindow().getDecorView();
+                        decor.addView(customView, new ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+                        ));
+                    }
+
+                    @Override
+                    public void onHideCustomView() {
+                        if (customView == null) return;
+
+                        // Restore orientation and system bars
+                        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
+                        getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+
+                        ViewGroup decor = (ViewGroup) getWindow().getDecorView();
+                        decor.removeView(customView);
+                        customView = null;
+
+                        if (customViewCallback != null) {
+                            customViewCallback.onCustomViewHidden();
+                            customViewCallback = null;
+                        }
                     }
                 });
 

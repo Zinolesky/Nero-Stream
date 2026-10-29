@@ -75,9 +75,18 @@ export const AppProvider = ({ children }) => {
     return bookmarks.some((b) => b.id === id && (b.media_type || 'movie') === (mediaType || 'movie'))
   }
 
-  const playMedia = (item, season = 1, episode = 1) => {
+  const playMedia = (item, season = 1, episode = 1, customStartAt = null) => {
     const mediaType = item.media_type || (item.first_air_date ? 'tv' : 'movie')
     const title = item.title || item.name || 'Untitled'
+
+    // Check for saved progress (Netflix resume)
+    const existingProgress = storage.getItemProgress(mediaType, item.id)
+    const startAt =
+      customStartAt !== null
+        ? customStartAt
+        : (existingProgress && existingProgress.currentTime > 15 && (!existingProgress.progressPercent || existingProgress.progressPercent < 95))
+        ? existingProgress.currentTime
+        : 0
 
     const playingObj = {
       id: item.id,
@@ -91,6 +100,10 @@ export const AppProvider = ({ children }) => {
       release_date: item.release_date || item.first_air_date,
       season: mediaType === 'tv' ? season : undefined,
       episode: mediaType === 'tv' ? episode : undefined,
+      startAt,
+      currentTime: startAt,
+      duration: existingProgress?.duration || 0,
+      progressPercent: existingProgress?.progressPercent || 0,
     }
 
     setCurrentPlaying(playingObj)
@@ -107,9 +120,21 @@ export const AppProvider = ({ children }) => {
       ...currentPlaying,
       season,
       episode,
+      startAt: 0,
+      currentTime: 0,
     }
     setCurrentPlaying(updated)
     const updatedHistory = storage.saveHistoryItem(updated)
+    setHistory(updatedHistory)
+  }
+
+  const updatePlaybackProgress = (currentTime, duration) => {
+    if (!currentPlaying || !currentTime) return
+    const updatedHistory = storage.saveHistoryItem({
+      ...currentPlaying,
+      currentTime,
+      duration,
+    })
     setHistory(updatedHistory)
   }
 
@@ -155,6 +180,7 @@ export const AppProvider = ({ children }) => {
         currentPlaying,
         playMedia,
         updatePlayingEpisode,
+        updatePlaybackProgress,
         closePlayer,
         activeTab,
         setActiveTab,

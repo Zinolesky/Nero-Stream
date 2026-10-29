@@ -9,8 +9,10 @@ export const PROVIDERS = [
     name: 'VidLink (Primary)',
     badge: 'HD • Subs',
     description: 'Clean responsive player with subtitles & auto-resume (vidlink.pro)',
-    getMovieUrl: (tmdbId) => `https://vidlink.pro/movie/${tmdbId}`,
-    getTvUrl: (tmdbId, season, episode) => `https://vidlink.pro/tv/${tmdbId}/${season}/${episode}`,
+    getMovieUrl: (tmdbId, startAt) =>
+      `https://vidlink.pro/movie/${tmdbId}${startAt && startAt > 15 ? `?startAt=${Math.floor(startAt)}` : ''}`,
+    getTvUrl: (tmdbId, season, episode, startAt) =>
+      `https://vidlink.pro/tv/${tmdbId}/${season}/${episode}${startAt && startAt > 15 ? `?startAt=${Math.floor(startAt)}` : ''}`,
   },
   {
     id: 'vidsrc-to',

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { useApp } from '../context/AppContext'
 import { PROVIDERS, SANDBOX_MODES } from '../services/providers'
 import { tmdb } from '../services/tmdb'
@@ -7,9 +7,9 @@ import {
   X,
   Server,
   Shield,
-  ShieldAlert,
   ShieldCheck,
   Maximize2,
+  Minimize2,
   ExternalLink,
   ChevronLeft,
   ChevronRight,
@@ -18,9 +18,17 @@ import {
   Star,
   Info,
   RotateCw,
+  RotateCcw,
   Bookmark,
   BookmarkCheck,
   AlertTriangle,
+  Clock,
+  Sun,
+  Volume2,
+  VolumeX,
+  Play,
+  Pause,
+  Sliders,
 } from 'lucide-react'
 
 export const PlayerView = () => {
@@ -33,6 +41,7 @@ export const PlayerView = () => {
     sandboxConfig,
     updateSandboxMode,
     updatePlayingEpisode,
+    updatePlaybackProgress,
     toggleBookmark,
     isBookmarked,
   } = useApp()
@@ -40,13 +49,37 @@ export const PlayerView = () => {
   const [metadata, setMetadata] = useState(null)
   const [iframeKey, setIframeKey] = useState(Date.now())
   const [sandboxDropdownOpen, setSandboxDropdownOpen] = useState(false)
+  const [isFullscreen, setIsFullscreen] = useState(false)
+  const [startAtOverride, setStartAtOverride] = useState(null)
+  const [showResumeBanner, setShowResumeBanner] = useState(true)
+
+  // Gesture Controls State
+  const [brightness, setBrightness] = useState(1.0) // 0.25 to 1.5
+  const [volume, setVolume] = useState(100) // 0 to 100
+  const [currentPlaybackTime, setCurrentPlaybackTime] = useState(0)
+  const [totalDuration, setTotalDuration] = useState(0)
+  const [hudState, setHudState] = useState(null) // { type, value, label }
+  const [gesturesEnabled, setGesturesEnabled] = useState(true)
+
+  const playerContainerRef = useRef(null)
   const iframeRef = useRef(null)
+  const hudTimerRef = useRef(null)
+
+  // Touch tracking refs
+  const touchStartRef = useRef({ x: 0, y: 0, time: 0, initialBrightness: 1.0, initialVolume: 100 })
+  const lastTapRef = useRef({ time: 0, x: 0, y: 0, side: null })
 
   const isTv = currentPlaying?.media_type === 'tv'
   const currentSeason = currentPlaying?.season || 1
   const currentEpisode = currentPlaying?.episode || 1
 
-  // Fetch complete details (cast, seasons, genres)
+  // Determine starting timestamp (Netflix resume)
+  const effectiveStartAt =
+    startAtOverride !== null
+      ? startAtOverride
+      : (currentPlaying?.startAt && currentPlaying.startAt > 15 ? currentPlaying.startAt : 0)
+
+  // Fetch full TMDB metadata (cast, seasons, genres, runtimes)
   useEffect(() => {
     let isMounted = true
     const fetchMetadata = async () => {
@@ -66,41 +99,273 @@ export const PlayerView = () => {
     }
   }, [currentPlaying?.id, currentPlaying?.media_type])
 
+  // Listen to VidLink postMessage events for real-time playback position & duration
+  useEffect(() => {
+    const handleMessage = (event) => {
+      try {
+        // VidLink sends { type: "PLAYER_EVENT", data: { event: "timeupdate"|"play"|"pause"|"seeked", currentTime, duration } }
+        if (event.data && typeof event.data === 'object') {
+          if (event.data.type === 'PLAYER_EVENT' && event.data.data) {
+            const { currentTime, duration } = event.data.data
+            if (typeof currentTime === 'number' && !isNaN(currentTime)) {
+              setCurrentPlaybackTime(currentTime)
+              if (typeof duration === 'number' && duration > 0) {
+                setTotalDuration(duration)
+              }
+              if (updatePlaybackProgress) {
+                updatePlaybackProgress(currentTime, duration || totalDuration)
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Error handling postMessage playback event', err)
+      }
+    }
+
+    window.addEventListener('message', handleMessage)
+    return () => {
+      window.removeEventListener('message', handleMessage)
+    }
+  }, [updatePlaybackProgress, totalDuration])
+
+  // Monitor document fullscreen state changes
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      const isFull = Boolean(document.fullscreenElement || document.webkitFullscreenElement)
+      setIsFullscreen(isFull)
+      if (!isFull && window.screen?.orientation?.unlock) {
+        window.screen.orientation.unlock().catch(() => {})
+      }
+    }
+
+    document.addEventListener('fullscreenchange', onFullscreenChange)
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange)
+    return () => {
+      document.removeEventListener('fullscreenchange', onFullscreenChange)
+      document.removeEventListener('webkitfullscreenchange', onFullscreenChange)
+    }
+  }, [])
+
   if (!currentPlaying) return null
 
-  // Compute stream URL based on Option 2 architecture
+  // Compute stream URL
   const streamUrl = isTv
-    ? activeProvider.getTvUrl(currentPlaying.id, currentSeason, currentEpisode)
-    : activeProvider.getMovieUrl(currentPlaying.id)
+    ? activeProvider.getTvUrl(currentPlaying.id, currentSeason, currentEpisode, effectiveStartAt)
+    : activeProvider.getMovieUrl(currentPlaying.id, effectiveStartAt)
 
   const handleReloadIframe = () => {
     setIframeKey(Date.now())
   }
 
   const handleNextEpisode = () => {
+    setStartAtOverride(0)
     updatePlayingEpisode(currentSeason, currentEpisode + 1)
   }
 
   const handlePrevEpisode = () => {
     if (currentEpisode > 1) {
+      setStartAtOverride(0)
       updatePlayingEpisode(currentSeason, currentEpisode - 1)
     }
   }
 
-  const handleFullscreen = () => {
-    if (iframeRef.current) {
-      if (iframeRef.current.requestFullscreen) {
-        iframeRef.current.requestFullscreen()
-      } else if (iframeRef.current.webkitRequestFullscreen) {
-        iframeRef.current.webkitRequestFullscreen()
+  // Display temporary gesture HUD (Sun, Volume, Skip)
+  const triggerHud = (type, value, label) => {
+    if (hudTimerRef.current) clearTimeout(hudTimerRef.current)
+    setHudState({ type, value, label })
+    hudTimerRef.current = setTimeout(() => {
+      setHudState(null)
+    }, 1200)
+  }
+
+  // Single dedicated Fullscreen & Landscape button
+  const toggleFullscreenLandscape = async () => {
+    const container = playerContainerRef.current
+    if (!container) return
+
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      try {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen()
+        } else if (document.webkitExitFullscreen) {
+          await document.webkitExitFullscreen()
+        }
+      } catch (e) {
+        console.warn('Exit fullscreen failed', e)
+      }
+      if (window.screen?.orientation?.unlock) {
+        window.screen.orientation.unlock().catch(() => {})
+      }
+      setIsFullscreen(false)
+    } else {
+      try {
+        if (container.requestFullscreen) {
+          await container.requestFullscreen()
+        } else if (container.webkitRequestFullscreen) {
+          await container.webkitRequestFullscreen()
+        }
+
+        // Lock screen orientation to landscape
+        if (window.screen?.orientation?.lock) {
+          await window.screen.orientation.lock('landscape').catch((e) => {
+            console.log('Screen orientation lock not supported on this browser/platform', e)
+          })
+        }
+        setIsFullscreen(true)
+      } catch (err) {
+        console.warn('Fullscreen landscape request failed:', err)
       }
     }
+  }
+
+  // Quick Seek (-10s / +10s)
+  const handleSeek = (deltaSeconds) => {
+    const baseTime = currentPlaybackTime || effectiveStartAt || 0
+    const newTime = Math.max(0, Math.floor(baseTime + deltaSeconds))
+    setCurrentPlaybackTime(newTime)
+
+    // Trigger visual HUD
+    if (deltaSeconds < 0) {
+      triggerHud('seek-back', null, '-10s')
+    } else {
+      triggerHud('seek-forward', null, '+10s')
+    }
+
+    // Attempt to notify iframe via postMessage
+    if (iframeRef.current?.contentWindow) {
+      try {
+        iframeRef.current.contentWindow.postMessage({ type: 'SEEK', time: newTime }, '*')
+        iframeRef.current.contentWindow.postMessage({ event: 'seek', value: newTime }, '*')
+        iframeRef.current.contentWindow.postMessage({ api: 'seek', value: newTime }, '*')
+      } catch (e) {
+        console.warn('Could not postMessage seek to iframe', e)
+      }
+    }
+
+    if (updatePlaybackProgress) {
+      updatePlaybackProgress(newTime, totalDuration)
+    }
+  }
+
+  // Toggle Play / Pause
+  const handleTogglePlay = () => {
+    triggerHud('play-pause', null, 'Play / Pause')
+    if (iframeRef.current?.contentWindow) {
+      try {
+        iframeRef.current.contentWindow.postMessage({ type: 'TOGGLE_PLAY' }, '*')
+        iframeRef.current.contentWindow.postMessage({ event: 'togglePlay' }, '*')
+      } catch (e) {
+        console.warn('Could not postMessage toggle play to iframe', e)
+      }
+    }
+  }
+
+  // Netflix-style Restart From Beginning
+  const handleRestartFromBeginning = () => {
+    setStartAtOverride(0)
+    setCurrentPlaybackTime(0)
+    setShowResumeBanner(false)
+    if (updatePlaybackProgress) {
+      updatePlaybackProgress(0, totalDuration)
+    }
+    setIframeKey(Date.now())
+  }
+
+  // Gesture Touch Handlers (Double tap, vertical slide for brightness & volume)
+  const handleTouchStart = (e) => {
+    if (!gesturesEnabled) return
+    const touch = e.touches[0]
+    const rect = e.currentTarget.getBoundingClientRect()
+    const x = touch.clientX - rect.left
+    const y = touch.clientY - rect.top
+    const now = Date.now()
+
+    // Classify zone: left 38%, right 38%, center 24%
+    let side = 'center'
+    if (x < rect.width * 0.38) side = 'left'
+    else if (x > rect.width * 0.62) side = 'right'
+
+    touchStartRef.current = {
+      x,
+      y,
+      time: now,
+      side,
+      initialBrightness: brightness,
+      initialVolume: volume,
+    }
+
+    // Check double-tap
+    const prev = lastTapRef.current
+    if (now - prev.time < 350 && Math.abs(x - prev.x) < 45 && Math.abs(y - prev.y) < 45) {
+      if (side === 'left') {
+        // Double-tap left: Go back 10 seconds
+        handleSeek(-10)
+      } else if (side === 'right') {
+        // Double-tap right: Skip 10 seconds
+        handleSeek(10)
+      } else {
+        // Double-tap center: Play/Pause
+        handleTogglePlay()
+      }
+      lastTapRef.current = { time: 0, x: 0, y: 0, side: null }
+    } else {
+      lastTapRef.current = { time: now, x, y, side }
+    }
+  }
+
+  const handleTouchMove = (e) => {
+    if (!gesturesEnabled) return
+    const touch = e.touches[0]
+    const rect = e.currentTarget.getBoundingClientRect()
+    const currentY = touch.clientY - rect.top
+    const deltaY = touchStartRef.current.y - currentY // Up is positive
+    const side = touchStartRef.current.side
+
+    // Threshold to prevent minor tap jitter from sliding
+    if (Math.abs(deltaY) > 8) {
+      if (side === 'left') {
+        // Sliding up and down on the left: Adjust Brightness (0.25 to 1.5)
+        const step = deltaY / (rect.height * 0.8)
+        const newBrightness = Math.min(1.5, Math.max(0.25, touchStartRef.current.initialBrightness + step))
+        setBrightness(newBrightness)
+        triggerHud('brightness', Math.round((newBrightness / 1.5) * 100), `${Math.round(newBrightness * 100)}%`)
+      } else if (side === 'right') {
+        // Sliding up and down on the right: Adjust Volume (0 to 100)
+        const step = (deltaY / (rect.height * 0.8)) * 100
+        const newVol = Math.min(100, Math.max(0, Math.round(touchStartRef.current.initialVolume + step)))
+        setVolume(newVol)
+        triggerHud('volume', newVol, `${newVol}%`)
+
+        // Post message to iframe
+        if (iframeRef.current?.contentWindow) {
+          try {
+            iframeRef.current.contentWindow.postMessage({ type: 'SET_VOLUME', volume: newVol / 100 }, '*')
+            iframeRef.current.contentWindow.postMessage({ event: 'setVolume', value: newVol / 100 }, '*')
+          } catch (err) {
+            // Silently ignore cross-origin restriction
+          }
+        }
+      }
+    }
+  }
+
+  const formatSeconds = (sec) => {
+    if (!sec || isNaN(sec)) return '0:00'
+    const s = Math.floor(sec)
+    const mins = Math.floor(s / 60)
+    const secs = s % 60
+    const hours = Math.floor(mins / 60)
+    if (hours > 0) {
+      const remMins = mins % 60
+      return `${hours}:${remMins < 10 ? '0' : ''}${remMins}:${secs < 10 ? '0' : ''}${secs}`
+    }
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`
   }
 
   const bookmarked = isBookmarked(currentPlaying.id, currentPlaying.media_type)
   const isSandboxed = Boolean(sandboxConfig.value)
 
-  // Check if title is unreleased
   const releaseDateStr = currentPlaying.release_date || metadata?.release_date
   const isFutureRelease = releaseDateStr && new Date(releaseDateStr).getTime() > Date.now()
 
@@ -218,8 +483,9 @@ export const PlayerView = () => {
           </div>
         )}
 
-        {/* Server Switcher Bar */}
+        {/* Server & Controls Toolbar */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
+          {/* Server Switchers */}
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mr-1">
               <Server className="w-3.5 h-3.5 text-rose-400" />
@@ -246,18 +512,31 @@ export const PlayerView = () => {
             })}
           </div>
 
-          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-            {/* Sandbox Toggle Dropdown */}
+          {/* Quick Actions: Sandbox, Reload, and Single Fullscreen Landscape Button */}
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap">
+            {/* Gesture Mode Pill Toggle */}
+            <button
+              onClick={() => setGesturesEnabled(!gesturesEnabled)}
+              className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border transition-colors ${
+                gesturesEnabled
+                  ? 'bg-emerald-950/50 border-emerald-500/50 text-emerald-300'
+                  : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+              }`}
+              title={gesturesEnabled ? 'Gestures Active: Swipe sides for Brightness & Volume, Double-tap to Skip 10s' : 'Gestures Disabled: Direct touch mode'}
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span className="text-[11px] font-semibold">{gesturesEnabled ? 'Gestures: ON' : 'Gestures: OFF'}</span>
+            </button>
+
+            {/* Sandbox Dropdown */}
             <div className="relative">
               <button
                 onClick={() => setSandboxDropdownOpen(!sandboxDropdownOpen)}
-                className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-slate-950 border border-slate-700 hover:border-slate-600 text-slate-200 transition-colors"
+                className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 hover:border-slate-600 text-slate-200 transition-colors"
                 title="Configure iframe sandboxing security mode"
               >
                 {sandboxMode === 'strict' ? (
                   <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-                ) : sandboxMode === 'moderate' ? (
-                  <Shield className="w-3.5 h-3.5 text-amber-400" />
                 ) : (
                   <Shield className="w-3.5 h-3.5 text-emerald-400" />
                 )}
@@ -292,6 +571,7 @@ export const PlayerView = () => {
               )}
             </div>
 
+            {/* Reload Stream Player */}
             <button
               onClick={handleReloadIframe}
               className="p-1.5 text-slate-300 hover:text-white bg-slate-950 border border-slate-800 rounded-lg hover:bg-slate-800 transition-colors"
@@ -300,44 +580,214 @@ export const PlayerView = () => {
               <RotateCw className="w-4 h-4" />
             </button>
 
+            {/* SINGLE DEDICATED FULLSCREEN LANDSCAPE BUTTON */}
             <button
-              onClick={handleFullscreen}
-              className="p-1.5 text-slate-300 hover:text-white bg-slate-950 border border-slate-800 rounded-lg hover:bg-slate-800 transition-colors"
-              title="Full screen player"
+              onClick={toggleFullscreenLandscape}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 rounded-lg shadow-md shadow-rose-950/40 border border-rose-500 transition-all active:scale-95"
+              title="Enter Fullscreen Landscape Mode"
             >
-              <Maximize2 className="w-4 h-4" />
+              {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+              <span className="hidden sm:inline">{isFullscreen ? 'Exit Fullscreen' : 'Landscape Fullscreen'}</span>
             </button>
           </div>
         </div>
 
-        {/* Embedded Iframe Player Box */}
-        <div className="relative w-full aspect-video bg-black rounded-2xl overflow-hidden border border-slate-800 shadow-2xl shadow-black/80">
+        {/* Embedded Iframe Player Box with Gesture Layer */}
+        <div
+          ref={playerContainerRef}
+          className={`relative w-full aspect-video bg-black rounded-2xl overflow-hidden border border-slate-800 shadow-2xl shadow-black/80 transition-all select-none ${
+            isFullscreen ? 'fixed inset-0 z-50 rounded-none border-0 aspect-auto w-screen h-screen' : ''
+          }`}
+        >
+          {/* Netflix-Style Resume Banner */}
+          {showResumeBanner && effectiveStartAt > 15 && (
+            <div className="absolute top-3 left-3 right-3 sm:left-4 sm:right-auto z-30 bg-slate-900/95 backdrop-blur-md border border-rose-500/60 rounded-xl px-3.5 py-2 flex items-center gap-3 shadow-2xl animate-in slide-in-from-top-2 duration-300 max-w-md">
+              <Clock className="w-4 h-4 text-rose-500 shrink-0" />
+              <div className="text-xs min-w-0">
+                <span className="text-slate-300">Resumed from </span>
+                <strong className="text-white font-mono">{formatSeconds(effectiveStartAt)}</strong>
+              </div>
+              <button
+                onClick={handleRestartFromBeginning}
+                className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-[11px] whitespace-nowrap shadow transition-colors ml-auto"
+              >
+                Start from Beginning
+              </button>
+              <button
+                onClick={() => setShowResumeBanner(false)}
+                className="p-1 text-slate-400 hover:text-white"
+                title="Dismiss"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          {/* Floating Exit Fullscreen Button (Shown in Fullscreen mode) */}
+          {isFullscreen && (
+            <div className="absolute top-3 right-3 z-30 flex items-center gap-2">
+              <button
+                onClick={() => setGesturesEnabled(!gesturesEnabled)}
+                className="px-2.5 py-1 rounded-lg bg-black/70 backdrop-blur-md text-white border border-white/20 text-xs font-semibold flex items-center gap-1.5"
+              >
+                <Sliders className="w-3.5 h-3.5 text-rose-400" />
+                <span>{gesturesEnabled ? 'Gestures Active' : 'Direct Touch'}</span>
+              </button>
+              <button
+                onClick={toggleFullscreenLandscape}
+                className="p-2 rounded-lg bg-black/70 backdrop-blur-md text-white border border-white/20 hover:bg-black/90 transition-colors"
+                title="Exit Fullscreen"
+              >
+                <Minimize2 className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* Video Iframe with Brightness filter */}
           <iframe
-            key={`${currentPlaying.id}-${currentSeason}-${currentEpisode}-${activeProvider.id}-${sandboxMode}-${iframeKey}`}
+            key={`${currentPlaying.id}-${currentSeason}-${currentEpisode}-${activeProvider.id}-${sandboxMode}-${iframeKey}-${effectiveStartAt}`}
             ref={iframeRef}
             src={streamUrl}
             title={currentPlaying.title || currentPlaying.name}
-            className="w-full h-full border-0"
+            className="w-full h-full border-0 transition-[filter] duration-150"
+            style={{ filter: `brightness(${brightness})` }}
             allowFullScreen
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
             referrerPolicy="origin"
             {...(sandboxConfig.value ? { sandbox: sandboxConfig.value } : {})}
           />
+
+          {/* Transparent Gesture Controls Overlay Layer */}
+          {gesturesEnabled && (
+            <div
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              className="absolute inset-0 z-20 pointer-events-auto cursor-pointer"
+              title="Double tap left: -10s | Double tap right: +10s | Swipe left: Brightness | Swipe right: Volume"
+            >
+              {/* Subtle visual hints on sides */}
+              <div className="absolute inset-y-0 left-0 w-[35%] flex items-center justify-start pl-4 pointer-events-none opacity-0 hover:opacity-10 transition-opacity">
+                <RotateCcw className="w-12 h-12 text-white" />
+              </div>
+              <div className="absolute inset-y-0 right-0 w-[35%] flex items-center justify-end pr-4 pointer-events-none opacity-0 hover:opacity-10 transition-opacity">
+                <RotateCw className="w-12 h-12 text-white" />
+              </div>
+            </div>
+          )}
+
+          {/* Gesture Visual HUD Feedback */}
+          {hudState && (
+            <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center animate-in zoom-in-90 fade-in duration-150">
+              {/* Brightness HUD (Left side indicator) */}
+              {hudState.type === 'brightness' && (
+                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-2xl p-4 flex flex-col items-center gap-2 shadow-2xl text-white">
+                  <Sun className="w-8 h-8 text-amber-400 animate-pulse" />
+                  <div className="w-24 h-2 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
+                    <div
+                      className="h-full bg-amber-400 transition-all duration-100"
+                      style={{ width: `${Math.min(100, Math.max(0, (brightness / 1.5) * 100))}%` }}
+                    />
+                  </div>
+                  <span className="text-xs font-mono font-bold text-amber-300">
+                    Brightness {hudState.label}
+                  </span>
+                </div>
+              )}
+
+              {/* Volume HUD (Right side indicator) */}
+              {hudState.type === 'volume' && (
+                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-2xl p-4 flex flex-col items-center gap-2 shadow-2xl text-white">
+                  {volume === 0 ? (
+                    <VolumeX className="w-8 h-8 text-rose-400" />
+                  ) : (
+                    <Volume2 className="w-8 h-8 text-rose-400 animate-pulse" />
+                  )}
+                  <div className="w-24 h-2 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
+                    <div
+                      className="h-full bg-rose-500 transition-all duration-100"
+                      style={{ width: `${volume}%` }}
+                    />
+                  </div>
+                  <span className="text-xs font-mono font-bold text-rose-300">
+                    Volume {hudState.label}
+                  </span>
+                </div>
+              )}
+
+              {/* -10s Seek HUD */}
+              {hudState.type === 'seek-back' && (
+                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-full p-5 flex flex-col items-center gap-1 shadow-2xl text-white">
+                  <RotateCcw className="w-10 h-10 text-rose-500 animate-spin" />
+                  <span className="text-sm font-bold font-mono text-rose-300">-10s</span>
+                </div>
+              )}
+
+              {/* +10s Seek HUD */}
+              {hudState.type === 'seek-forward' && (
+                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-full p-5 flex flex-col items-center gap-1 shadow-2xl text-white">
+                  <RotateCw className="w-10 h-10 text-rose-500 animate-spin" />
+                  <span className="text-sm font-bold font-mono text-rose-300">+10s</span>
+                </div>
+              )}
+
+              {/* Play / Pause HUD */}
+              {hudState.type === 'play-pause' && (
+                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-full p-5 shadow-2xl text-white">
+                  <Play className="w-10 h-10 text-rose-500 fill-current animate-pulse" />
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Helpful Tip */}
-        <div className="flex items-center justify-between text-xs text-slate-400 px-1 pt-1">
+        {/* Quick Gesture & Control Buttons Bar (Desktop & Touch Friendly) */}
+        <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-900/70 border border-slate-800/80 rounded-xl px-3 py-2 text-xs text-slate-300">
           <div className="flex items-center gap-1.5">
-            <Info className="w-3.5 h-3.5 text-rose-400 shrink-0" />
-            <span>
-              If Server 1 buffers or displays an error, switch to{' '}
-              <strong className="text-slate-200">Server 2 (VidSrc TO)</strong> or{' '}
-              <strong className="text-slate-200">Server 3 (VidSrc PM)</strong>.
+            <span className="text-slate-400 font-medium">Quick Seek:</span>
+            <button
+              onClick={() => handleSeek(-10)}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-mono transition-colors"
+              title="Rewind 10 seconds"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-rose-400" />
+              <span>-10s</span>
+            </button>
+            <button
+              onClick={() => handleSeek(10)}
+              className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-mono transition-colors"
+              title="Skip forward 10 seconds"
+            >
+              <RotateCw className="w-3.5 h-3.5 text-rose-400" />
+              <span>+10s</span>
+            </button>
+          </div>
+
+          {/* Quick Brightness Slider */}
+          <div className="flex items-center gap-2">
+            <Sun className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            <input
+              type="range"
+              min="0.25"
+              max="1.5"
+              step="0.05"
+              value={brightness}
+              onChange={(e) => {
+                const val = parseFloat(e.target.value)
+                setBrightness(val)
+                triggerHud('brightness', Math.round((val / 1.5) * 100), `${Math.round(val * 100)}%`)
+              }}
+              className="w-20 sm:w-28 accent-amber-400 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
+              title={`Brightness: ${Math.round(brightness * 100)}%`}
+            />
+            <span className="font-mono text-[11px] text-amber-300 w-8 text-right">
+              {Math.round(brightness * 100)}%
             </span>
           </div>
-          <span className="hidden sm:inline font-mono text-[11px] text-slate-500">
-            Source: {activeProvider.name}
-          </span>
+
+          <div className="hidden md:flex items-center gap-1.5 text-slate-400 text-[11px]">
+            <Info className="w-3 h-3 text-rose-400" />
+            <span>Mobile Gestures: Swipe left for Brightness, right for Volume, double-tap sides to skip 10s.</span>
+          </div>
         </div>
 
         {/* TV Series Episode Drawer */}
@@ -349,7 +799,10 @@ export const PlayerView = () => {
               currentEpisode={currentEpisode}
               totalSeasons={metadata?.number_of_seasons || currentPlaying.number_of_seasons || 1}
               seasons={metadata?.seasons || []}
-              onSelectEpisode={(s, e) => updatePlayingEpisode(s, e)}
+              onSelectEpisode={(s, e) => {
+                setStartAtOverride(0)
+                updatePlayingEpisode(s, e)
+              }}
             />
           </div>
         )}

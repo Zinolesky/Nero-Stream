@@ -107,19 +107,37 @@ export const storage = {
   saveHistoryItem: (item) => {
     try {
       const history = storage.getHistory()
+      const existing = history.find((h) => h.id === item.id && h.media_type === item.media_type)
       const filtered = history.filter((h) => !(h.id === item.id && h.media_type === item.media_type))
-      const updated = [
-        {
-          ...item,
-          last_watched_at: new Date().toISOString(),
-        },
-        ...filtered,
-      ].slice(0, 30) // keep last 30
+      
+      const currentTime = item.currentTime ?? existing?.currentTime ?? 0
+      const duration = item.duration ?? existing?.duration ?? 0
+      const progressPercent = duration > 0 ? Math.min(100, Math.round((currentTime / duration) * 100)) : (existing?.progressPercent ?? 0)
+
+      const updatedItem = {
+        ...existing,
+        ...item,
+        currentTime,
+        duration,
+        progressPercent,
+        last_watched_at: new Date().toISOString(),
+      }
+
+      const updated = [updatedItem, ...filtered].slice(0, 30) // keep last 30
       localStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(updated))
       return updated
     } catch (e) {
       console.error('Failed to update history', e)
       return []
+    }
+  },
+
+  getItemProgress: (mediaType, id) => {
+    try {
+      const history = storage.getHistory()
+      return history.find((h) => h.id === Number(id) && h.media_type === mediaType) || null
+    } catch {
+      return null
     }
   },
 
