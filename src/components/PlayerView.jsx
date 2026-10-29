@@ -29,6 +29,7 @@ import {
   Play,
   Pause,
   Sliders,
+  FastForward,
 } from 'lucide-react'
 
 export const PlayerView = () => {
@@ -53,9 +54,11 @@ export const PlayerView = () => {
   const [startAtOverride, setStartAtOverride] = useState(null)
   const [showResumeBanner, setShowResumeBanner] = useState(true)
 
-  // Gesture Controls State
+  // Gesture & Playback State
   const [brightness, setBrightness] = useState(1.0) // 0.25 to 1.5
   const [volume, setVolume] = useState(100) // 0 to 100
+  const [playbackSpeed, setPlaybackSpeed] = useState(1.0) // 1.0, 1.25, 1.5, 2.0
+  const [isFastForwarding, setIsFastForwarding] = useState(false) // Hold for 2x speed active
   const [currentPlaybackTime, setCurrentPlaybackTime] = useState(0)
   const [totalDuration, setTotalDuration] = useState(0)
   const [hudState, setHudState] = useState(null) // { type, value, label }
@@ -64,6 +67,7 @@ export const PlayerView = () => {
   const playerContainerRef = useRef(null)
   const iframeRef = useRef(null)
   const hudTimerRef = useRef(null)
+  const holdTimerRef = useRef(null)
 
   // Touch tracking refs
   const touchStartRef = useRef({ x: 0, y: 0, time: 0, initialBrightness: 1.0, initialVolume: 100 })
@@ -170,13 +174,56 @@ export const PlayerView = () => {
     }
   }
 
-  // Display temporary gesture HUD (Sun, Volume, Skip)
+  // Display temporary gesture HUD (Sun, Volume, Skip, Speed)
   const triggerHud = (type, value, label) => {
     if (hudTimerRef.current) clearTimeout(hudTimerRef.current)
     setHudState({ type, value, label })
     hudTimerRef.current = setTimeout(() => {
       setHudState(null)
     }, 1200)
+  }
+
+  // Dispatch speed commands to player iframe
+  const sendSpeedCommand = (rate) => {
+    if (iframeRef.current?.contentWindow) {
+      try {
+        iframeRef.current.contentWindow.postMessage({ type: 'NERO_SPEED', rate }, '*')
+        iframeRef.current.contentWindow.postMessage({ type: 'SET_PLAYBACK_RATE', rate }, '*')
+        iframeRef.current.contentWindow.postMessage({ event: 'setPlaybackRate', value: rate }, '*')
+        iframeRef.current.contentWindow.postMessage({ api: 'setSpeed', value: rate }, '*')
+      } catch (e) {
+        // Silently catch cross-origin restriction
+      }
+    }
+  }
+
+  // Start Hold for 2x Speed
+  const startFastForward = () => {
+    setIsFastForwarding(true)
+    sendSpeedCommand(2.0)
+    if (navigator.vibrate) {
+      try {
+        navigator.vibrate(40)
+      } catch (e) {}
+    }
+  }
+
+  // Stop Hold for 2x Speed (return to base speed)
+  const stopFastForward = () => {
+    setIsFastForwarding(false)
+    sendSpeedCommand(playbackSpeed)
+    if (navigator.vibrate) {
+      try {
+        navigator.vibrate(20)
+      } catch (e) {}
+    }
+  }
+
+  // Change manual base speed (1x, 1.25x, 1.5x, 2x)
+  const handleSetSpeed = (rate) => {
+    setPlaybackSpeed(rate)
+    sendSpeedCommand(rate)
+    triggerHud('speed', rate, `${rate}x Speed`)
   }
 
   // Single dedicated Fullscreen & Landscape button
@@ -232,7 +279,7 @@ export const PlayerView = () => {
       triggerHud('seek-forward', null, '+10s')
     }
 
-    // Attempt to notify iframe via postMessage
+    // Notify iframe via postMessage
     if (iframeRef.current?.contentWindow) {
       try {
         iframeRef.current.contentWindow.postMessage({ type: 'SEEK', time: newTime }, '*')
@@ -272,7 +319,7 @@ export const PlayerView = () => {
     setIframeKey(Date.now())
   }
 
-  // Gesture Touch Handlers (Double tap, vertical slide for brightness & volume)
+  // Gesture Touch Handlers (Double tap, vertical slide, and HOLD FOR 2X SPEED)
   const handleTouchStart = (e) => {
     if (!gesturesEnabled) return
     const touch = e.touches[0]
@@ -295,9 +342,21 @@ export const PlayerView = () => {
       initialVolume: volume,
     }
 
+    // HOLD FOR 2X SPEED: Trigger if held in place for > 350ms
+    if (holdTimerRef.current) clearTimeout(holdTimerRef.current)
+    holdTimerRef.current = setTimeout(() => {
+      startFastForward()
+    }, 350)
+
     // Check double-tap
     const prev = lastTapRef.current
     if (now - prev.time < 350 && Math.abs(x - prev.x) < 45 && Math.abs(y - prev.y) < 45) {
+      // Cancel hold timer on second tap of a double tap
+      if (holdTimerRef.current) {
+        clearTimeout(holdTimerRef.current)
+        holdTimerRef.current = null
+      }
+
       if (side === 'left') {
         // Double-tap left: Go back 10 seconds
         handleSeek(-10)
@@ -318,9 +377,22 @@ export const PlayerView = () => {
     if (!gesturesEnabled) return
     const touch = e.touches[0]
     const rect = e.currentTarget.getBoundingClientRect()
+    const currentX = touch.clientX - rect.left
     const currentY = touch.clientY - rect.top
+    const deltaX = Math.abs(currentX - touchStartRef.current.x)
     const deltaY = touchStartRef.current.y - currentY // Up is positive
     const side = touchStartRef.current.side
+
+    // If moved by more than 10px, cancel hold timer and 2x speed
+    if (deltaX > 10 || Math.abs(deltaY) > 10) {
+      if (holdTimerRef.current) {
+        clearTimeout(holdTimerRef.current)
+        holdTimerRef.current = null
+      }
+      if (isFastForwarding) {
+        stopFastForward()
+      }
+    }
 
     // Threshold to prevent minor tap jitter from sliding
     if (Math.abs(deltaY) > 8) {
@@ -347,6 +419,35 @@ export const PlayerView = () => {
           }
         }
       }
+    }
+  }
+
+  const handleTouchEnd = () => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current)
+      holdTimerRef.current = null
+    }
+    if (isFastForwarding) {
+      stopFastForward()
+    }
+  }
+
+  // Mouse handlers for desktop Hold for 2x Speed
+  const handleMouseDown = () => {
+    if (!gesturesEnabled) return
+    if (holdTimerRef.current) clearTimeout(holdTimerRef.current)
+    holdTimerRef.current = setTimeout(() => {
+      startFastForward()
+    }, 350)
+  }
+
+  const handleMouseUp = () => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current)
+      holdTimerRef.current = null
+    }
+    if (isFastForwarding) {
+      stopFastForward()
     }
   }
 
@@ -522,7 +623,7 @@ export const PlayerView = () => {
                   ? 'bg-emerald-950/50 border-emerald-500/50 text-emerald-300'
                   : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
-              title={gesturesEnabled ? 'Gestures Active: Swipe sides for Brightness & Volume, Double-tap to Skip 10s' : 'Gestures Disabled: Direct touch mode'}
+              title={gesturesEnabled ? 'Gestures Active: Hold anywhere for 2x Speed, Swipe sides for Brightness & Volume, Double-tap to Skip 10s' : 'Gestures Disabled: Direct touch mode'}
             >
               <Sliders className="w-3.5 h-3.5" />
               <span className="text-[11px] font-semibold">{gesturesEnabled ? 'Gestures: ON' : 'Gestures: OFF'}</span>
@@ -623,6 +724,16 @@ export const PlayerView = () => {
             </div>
           )}
 
+          {/* HOLD FOR 2X SPEED HUD BADGE (Floating Top Center, YouTube/TikTok style) */}
+          {isFastForwarding && (
+            <div className="absolute top-4 inset-x-0 mx-auto w-fit z-40 bg-slate-900/95 backdrop-blur-md border border-rose-500/80 rounded-full px-5 py-2 flex items-center gap-2.5 shadow-2xl shadow-rose-950/50 animate-in zoom-in-95 duration-150">
+              <FastForward className="w-5 h-5 text-rose-500 animate-pulse fill-current" />
+              <span className="text-xs sm:text-sm font-extrabold text-white tracking-wider font-mono">
+                2X SPEED &gt;&gt;
+              </span>
+            </div>
+          )}
+
           {/* Floating Exit Fullscreen Button (Shown in Fullscreen mode) */}
           {isFullscreen && (
             <div className="absolute top-3 right-3 z-30 flex items-center gap-2">
@@ -662,8 +773,13 @@ export const PlayerView = () => {
             <div
               onTouchStart={handleTouchStart}
               onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
+              onTouchCancel={handleTouchEnd}
+              onMouseDown={handleMouseDown}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
               className="absolute inset-0 z-20 pointer-events-auto cursor-pointer"
-              title="Double tap left: -10s | Double tap right: +10s | Swipe left: Brightness | Swipe right: Volume"
+              title="Hold anywhere for 2x Speed | Double tap left: -10s | Double tap right: +10s | Swipe left: Brightness | Swipe right: Volume"
             >
               {/* Subtle visual hints on sides */}
               <div className="absolute inset-y-0 left-0 w-[35%] flex items-center justify-start pl-4 pointer-events-none opacity-0 hover:opacity-10 transition-opacity">
@@ -678,6 +794,16 @@ export const PlayerView = () => {
           {/* Gesture Visual HUD Feedback */}
           {hudState && (
             <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center animate-in zoom-in-90 fade-in duration-150">
+              {/* Speed HUD */}
+              {hudState.type === 'speed' && (
+                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-2xl p-4 flex flex-col items-center gap-2 shadow-2xl text-white">
+                  <FastForward className="w-8 h-8 text-rose-400 animate-pulse" />
+                  <span className="text-sm font-mono font-bold text-rose-300">
+                    {hudState.label}
+                  </span>
+                </div>
+              )}
+
               {/* Brightness HUD (Left side indicator) */}
               {hudState.type === 'brightness' && (
                 <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-2xl p-4 flex flex-col items-center gap-2 shadow-2xl text-white">
@@ -741,9 +867,10 @@ export const PlayerView = () => {
         </div>
 
         {/* Quick Gesture & Control Buttons Bar (Desktop & Touch Friendly) */}
-        <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-900/70 border border-slate-800/80 rounded-xl px-3 py-2 text-xs text-slate-300">
+        <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/70 border border-slate-800/80 rounded-xl px-3 py-2 text-xs text-slate-300">
+          {/* Quick Seek */}
           <div className="flex items-center gap-1.5">
-            <span className="text-slate-400 font-medium">Quick Seek:</span>
+            <span className="text-slate-400 font-medium">Seek:</span>
             <button
               onClick={() => handleSeek(-10)}
               className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 font-mono transition-colors"
@@ -760,6 +887,26 @@ export const PlayerView = () => {
               <RotateCw className="w-3.5 h-3.5 text-rose-400" />
               <span>+10s</span>
             </button>
+          </div>
+
+          {/* Quick Speed Pills */}
+          <div className="flex items-center gap-1.5">
+            <FastForward className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+            <span className="text-slate-400 font-medium">Speed:</span>
+            {[1.0, 1.25, 1.5, 2.0].map((rate) => (
+              <button
+                key={rate}
+                onClick={() => handleSetSpeed(rate)}
+                className={`px-2 py-0.5 rounded text-[11px] font-mono font-bold transition-all border ${
+                  playbackSpeed === rate && !isFastForwarding
+                    ? 'bg-rose-600 text-white border-rose-500 shadow-sm'
+                    : 'bg-slate-800/90 text-slate-300 border-slate-700/80 hover:bg-slate-750 hover:text-white'
+                }`}
+                title={`Set playback speed to ${rate}x`}
+              >
+                {rate}x
+              </button>
+            ))}
           </div>
 
           {/* Quick Brightness Slider */}
@@ -784,9 +931,9 @@ export const PlayerView = () => {
             </span>
           </div>
 
-          <div className="hidden md:flex items-center gap-1.5 text-slate-400 text-[11px]">
+          <div className="hidden lg:flex items-center gap-1.5 text-slate-400 text-[11px]">
             <Info className="w-3 h-3 text-rose-400" />
-            <span>Mobile Gestures: Swipe left for Brightness, right for Volume, double-tap sides to skip 10s.</span>
+            <span>Hold screen for 2x Speed • Swipe left for Brightness • Double-tap sides to skip 10s.</span>
           </div>
         </div>
 

@@ -11,6 +11,10 @@ import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
+import java.util.Collections;
+import java.util.HashSet;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebChromeClient;
 import com.getcapacitor.BridgeWebViewClient;
@@ -41,6 +45,34 @@ public class MainActivity extends BridgeActivity {
                 // Enable media playback without gesture gating
                 settings.setMediaPlaybackRequiresUserGesture(false);
                 settings.setDomStorageEnabled(true);
+
+                // Inject cross-frame 2x speed controller script into all frames (including cross-origin iframes)
+                try {
+                    if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                        String speedScript = "(function() {" +
+                            "window.addEventListener('message', function(event) {" +
+                            "    try {" +
+                            "        if (event.data && (event.data.type === 'NERO_SPEED' || event.data.type === 'SET_PLAYBACK_RATE')) {" +
+                            "            var rate = event.data.rate || 1.0;" +
+                            "            var videos = document.querySelectorAll('video');" +
+                            "            for (var i = 0; i < videos.length; i++) {" +
+                            "                videos[i].playbackRate = rate;" +
+                            "            }" +
+                            "        }" +
+                            "    } catch (e) {}" +
+                            "});" +
+                            "})();";
+
+                        WebViewCompat.addDocumentStartJavaScript(
+                            webView,
+                            speedScript,
+                            new HashSet<>(Collections.singletonList("*"))
+                        );
+                        Log.i(TAG, "Cross-frame 2x speed controller script injected via WebViewCompat.");
+                    }
+                } catch (Exception scriptEx) {
+                    Log.w(TAG, "Could not inject speed script: " + scriptEx.getMessage());
+                }
 
                 // Configure WebChromeClient with popup blocking AND native Fullscreen Landscape handling
                 webView.setWebChromeClient(new BridgeWebChromeClient(getBridge()) {
