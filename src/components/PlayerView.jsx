@@ -19,6 +19,7 @@ import {
   Star,
   Info,
   RotateCw,
+  RotateCcw,
   Bookmark,
   BookmarkCheck,
   AlertTriangle,
@@ -27,6 +28,8 @@ import {
   Volume2,
   VolumeX,
   Volume1,
+  Play,
+  Pause,
 } from 'lucide-react'
 
 export const PlayerView = () => {
@@ -54,9 +57,11 @@ export const PlayerView = () => {
   // Hardware Media & Display Controls (Supported on Android and Web)
   const [brightness, setBrightness] = useState(1.0) // 0.25 to 1.5
   const [volumeLevel, setVolumeLevel] = useState(70) // 0 to 100
+  const [hudState, setHudState] = useState(null) // { type, value, label }
 
   const playerContainerRef = useRef(null)
   const iframeRef = useRef(null)
+  const hudTimerRef = useRef(null)
 
   const isNative = Capacitor.isNativePlatform()
   const isTv = currentPlaying?.media_type === 'tv'
@@ -68,6 +73,46 @@ export const PlayerView = () => {
     startAtOverride !== null
       ? startAtOverride
       : (currentPlaying?.startAt && currentPlaying.startAt > 15 ? currentPlaying.startAt : 0)
+
+  // Display temporary on-screen VLC HUD (Sun, Volume, Play, Pause, Seek)
+  const triggerHud = (type, value, label) => {
+    if (hudTimerRef.current) clearTimeout(hudTimerRef.current)
+    setHudState({ type, value, label })
+    hudTimerRef.current = setTimeout(() => {
+      setHudState(null)
+    }, 1200)
+  }
+
+  // Activate Native VLC Gestures on Android when Player is Open
+  useEffect(() => {
+    if (window.AndroidMediaBridge?.setPlayerActive) {
+      window.AndroidMediaBridge.setPlayerActive(true)
+    }
+
+    // Register native gesture event listeners from Android MainActivity
+    window.onNativeBrightnessChanged = (percent) => {
+      const bVal = Math.max(0.25, Math.min(1.5, percent / 100))
+      setBrightness(bVal)
+      triggerHud('brightness', percent, `${percent}%`)
+    }
+
+    window.onNativePlayPause = () => {
+      triggerHud('play-pause', null, 'Play / Pause')
+    }
+
+    window.onNativeSeek = (delta) => {
+      triggerHud(delta < 0 ? 'seek-back' : 'seek-forward', null, delta < 0 ? '-10s' : '+10s')
+    }
+
+    return () => {
+      if (window.AndroidMediaBridge?.setPlayerActive) {
+        window.AndroidMediaBridge.setPlayerActive(false)
+      }
+      delete window.onNativeBrightnessChanged
+      delete window.onNativePlayPause
+      delete window.onNativeSeek
+    }
+  }, [])
 
   // Fetch initial native Android hardware volume if available
   useEffect(() => {
@@ -176,7 +221,6 @@ export const PlayerView = () => {
     setVolumeLevel(newVol)
 
     if (window.AndroidMediaBridge?.adjustVolume) {
-      // Calls native Android AudioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, ...)
       window.AndroidMediaBridge.adjustVolume(direction > 0 ? 1 : -1)
     }
   }
@@ -192,7 +236,6 @@ export const PlayerView = () => {
   const handleBrightnessChange = (val) => {
     setBrightness(val)
     if (window.AndroidMediaBridge?.setScreenBrightness) {
-      // Maps 0.25 - 1.5 range to Android screen brightness (0.05 to 1.0)
       const mapped = Math.max(0.05, Math.min(1.0, (val - 0.25) / 1.25))
       window.AndroidMediaBridge.setScreenBrightness(mapped)
     }
@@ -533,6 +576,50 @@ export const PlayerView = () => {
             referrerPolicy="origin"
             {...(sandboxConfig.value ? { sandbox: sandboxConfig.value } : {})}
           />
+
+          {/* VLC-Style On-Screen HUD (Pointer-events-none: never blocks touches) */}
+          {hudState && isNative && (
+            <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center animate-in zoom-in-90 fade-in duration-150">
+              {/* Brightness HUD (Sun icon + percentage) */}
+              {hudState.type === 'brightness' && (
+                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-2xl p-4 flex flex-col items-center gap-2 shadow-2xl text-white">
+                  <Sun className="w-8 h-8 text-amber-400 animate-pulse" />
+                  <div className="w-24 h-2 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
+                    <div
+                      className="h-full bg-amber-400 transition-all duration-100"
+                      style={{ width: `${Math.min(100, Math.max(0, (brightness / 1.5) * 100))}%` }}
+                    />
+                  </div>
+                  <span className="text-xs font-mono font-bold text-amber-300">
+                    Brightness {hudState.label}
+                  </span>
+                </div>
+              )}
+
+              {/* Play / Pause HUD */}
+              {hudState.type === 'play-pause' && (
+                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-full p-5 shadow-2xl text-white">
+                  <Play className="w-10 h-10 text-rose-500 fill-current animate-pulse" />
+                </div>
+              )}
+
+              {/* -10s Seek HUD */}
+              {hudState.type === 'seek-back' && (
+                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-full p-5 flex flex-col items-center gap-1 shadow-2xl text-white">
+                  <RotateCcw className="w-10 h-10 text-rose-500 animate-spin" />
+                  <span className="text-sm font-bold font-mono text-rose-300">-10s</span>
+                </div>
+              )}
+
+              {/* +10s Seek HUD */}
+              {hudState.type === 'seek-forward' && (
+                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-full p-5 flex flex-col items-center gap-1 shadow-2xl text-white">
+                  <RotateCw className="w-10 h-10 text-rose-500 animate-spin" />
+                  <span className="text-sm font-bold font-mono text-rose-300">+10s</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Hardware Volume & Display Control Bar */}
@@ -596,7 +683,7 @@ export const PlayerView = () => {
 
           <div className="hidden md:flex items-center gap-1.5 text-slate-400 text-[11px]">
             <Info className="w-3 h-3 text-rose-400" />
-            <span>Use on-screen player controls for instant play, pause, 10s skip, subtitles, and speed.</span>
+            <span>{isNative ? 'VLC Gestures active: Swipe left for Brightness, right for Volume, double-tap center to Play/Pause.' : 'Use player controls for play, pause, seek, subtitles, and speed.'}</span>
           </div>
         </div>
 
