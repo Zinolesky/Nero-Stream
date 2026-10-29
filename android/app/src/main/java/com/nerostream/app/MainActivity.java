@@ -64,6 +64,13 @@ public class MainActivity extends BridgeActivity {
         public void setPlayerActive(boolean active) {
             isPlayerActive = active;
             Log.d(TAG, "Native player active state: " + active);
+            if (active && audioManager != null) {
+                int curVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+                int maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                if (curVol == 0 && maxVol > 0) {
+                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxVol, 0);
+                }
+            }
         }
 
         @JavascriptInterface
@@ -81,7 +88,7 @@ public class MainActivity extends BridgeActivity {
         public void adjustVolume(int direction) {
             if (audioManager != null) {
                 int dir = direction > 0 ? AudioManager.ADJUST_RAISE : AudioManager.ADJUST_LOWER;
-                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, dir, AudioManager.FLAG_SHOW_UI);
+                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, dir, 0);
                 Log.d(TAG, "Hardware volume adjusted: " + (direction > 0 ? "UP" : "DOWN"));
             }
         }
@@ -91,7 +98,7 @@ public class MainActivity extends BridgeActivity {
             if (audioManager != null) {
                 int maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
                 int targetVol = Math.round((Math.max(0, Math.min(100, percentage)) / 100.0f) * maxVol);
-                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, AudioManager.FLAG_SHOW_UI);
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVol, 0);
                 Log.d(TAG, "Hardware volume set to: " + targetVol + "/" + maxVol);
             }
         }
@@ -205,7 +212,21 @@ public class MainActivity extends BridgeActivity {
         if (Math.abs(volumeAccumulator) >= VOLUME_SCROLL_STEP) {
             int direction = volumeAccumulator > 0 ? AudioManager.ADJUST_RAISE : AudioManager.ADJUST_LOWER;
             if (audioManager != null) {
-                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, AudioManager.FLAG_SHOW_UI);
+                // Adjust volume silently in hardware without triggering the OS volume popup (FLAG = 0)
+                audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, 0);
+
+                int maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC);
+                int curVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC);
+                int percent = maxVol > 0 ? Math.round(((float) curVol / maxVol) * 100) : 50;
+
+                runOnUiThread(() -> {
+                    if (getBridge() != null && getBridge().getWebView() != null) {
+                        getBridge().getWebView().evaluateJavascript(
+                            "window.onNativeVolumeChanged && window.onNativeVolumeChanged(" + percent + ");",
+                            null
+                        );
+                    }
+                });
             }
             volumeAccumulator = 0;
         }
@@ -368,12 +389,71 @@ public class MainActivity extends BridgeActivity {
                             "    });" +
                             "    return list;" +
                             "}" +
+                            "function forceFullVolume() {" +
+                            "    var vids = findVids();" +
+                            "    vids.forEach(function(v) {" +
+                            "        try {" +
+                            "            v.muted = false;" +
+                            "            v.defaultMuted = false;" +
+                            "            v.volume = 1.0;" +
+                            "        } catch(e){}" +
+                            "    });" +
+                            "    var muteBtn = document.querySelector('button[data-plyr=\"mute\"].plyr__control--pressed, .vjs-mute-control.vjs-vol-0');" +
+                            "    if (muteBtn) { try { muteBtn.click(); } catch(e){} }" +
+                            "}" +
+                            "function setControlsVisible(show) {" +
+                            "    var controls = document.querySelectorAll('.plyr__controls, .vjs-control-bar, .controls, [class*=\"controls\"], [class*=\"player-controls\"], .jw-controls');" +
+                            "    controls.forEach(function(c) {" +
+                            "        c.style.transition = 'opacity 0.2s ease-in-out';" +
+                            "        c.style.opacity = show ? '1' : '0';" +
+                            "        c.style.pointerEvents = show ? 'auto' : 'none';" +
+                            "    });" +
+                            "    var player = document.querySelector('.plyr, .video-js, .jwplayer');" +
+                            "    if (player) {" +
+                            "        if (show) {" +
+                            "            player.classList.remove('plyr--hide-controls');" +
+                            "            player.classList.add('plyr--hover');" +
+                            "        } else {" +
+                            "            player.classList.add('plyr--hide-controls');" +
+                            "            player.classList.remove('plyr--hover');" +
+                            "        }" +
+                            "    }" +
+                            "}" +
+                            "forceFullVolume();" +
+                            "document.addEventListener('loadedmetadata', forceFullVolume, true);" +
+                            "document.addEventListener('canplay', forceFullVolume, true);" +
+                            "document.addEventListener('play', forceFullVolume, true);" +
+                            "document.addEventListener('playing', forceFullVolume, true);" +
+                            "document.addEventListener('volumechange', function(e) {" +
+                            "    if (e.target && e.target.tagName === 'VIDEO' && e.target.muted && !e.target.__userExplicitMuted) {" +
+                            "        e.target.muted = false;" +
+                            "        e.target.volume = 1.0;" +
+                            "    }" +
+                            "}, true);" +
+                            "var unMuteCount = 0;" +
+                            "var unMuteInterval = setInterval(function() {" +
+                            "    forceFullVolume();" +
+                            "    unMuteCount++;" +
+                            "    if (unMuteCount > 20) clearInterval(unMuteInterval);" +
+                            "}, 200);" +
                             "window.addEventListener('message', function(ev) {" +
                             "    if (!ev.data) return;" +
                             "    var vids = findVids();" +
-                            "    if (ev.data.type === 'NERO_PLAY_PAUSE' || ev.data.type === 'TOGGLE_PLAY') {" +
+                            "    if (ev.data.type === 'NERO_UNMUTE') {" +
+                            "        forceFullVolume();" +
+                            "    } else if (ev.data.type === 'NERO_PLAY_PAUSE' || ev.data.type === 'TOGGLE_PLAY') {" +
                             "        if (vids.length > 0) {" +
-                            "            vids.forEach(function(v) { if (v.paused) v.play().catch(function(){}); else v.pause(); });" +
+                            "            vids.forEach(function(v) {" +
+                            "                if (v.paused) {" +
+                            "                    v.muted = false;" +
+                            "                    v.volume = 1.0;" +
+                            "                    v.play().catch(function(){});" +
+                            "                    setControlsVisible(false);" +
+                            "                } else {" +
+                            "                    v.pause();" +
+                            "                    setControlsVisible(true);" +
+                            "                }" +
+                            "            });" +
                             "        } else {" +
                             "            var btn = document.querySelector('button[data-plyr=\"play\"], .plyr__control--overlaid, .vjs-big-play-button, .vjs-play-control, [aria-label*=\"Play\" i], [aria-label*=\"Pause\" i], .play-btn, .play-button');" +
                             "            if (btn) btn.click();" +
@@ -392,6 +472,12 @@ public class MainActivity extends BridgeActivity {
                             "                : document.querySelector('button[data-plyr=\"fast-forward\"], [aria-label*=\"forward\" i], [aria-label*=\"skip\" i], .forward-btn');" +
                             "            if (btn) btn.click();" +
                             "        }" +
+                            "        setControlsVisible(true);" +
+                            "        if (window.__neroSeekTimer) clearTimeout(window.__neroSeekTimer);" +
+                            "        window.__neroSeekTimer = setTimeout(function() {" +
+                            "            var isPlaying = vids.some(function(v) { return !v.paused; });" +
+                            "            if (isPlaying) setControlsVisible(false);" +
+                            "        }, 1000);" +
                             "    }" +
                             "    var childIfrs = document.querySelectorAll('iframe');" +
                             "    for (var i = 0; i < childIfrs.length; i++) {" +

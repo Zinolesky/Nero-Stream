@@ -25,6 +25,8 @@ import {
   AlertTriangle,
   Clock,
   Sun,
+  Volume2,
+  VolumeX,
   Play,
   Pause,
 } from 'lucide-react'
@@ -51,13 +53,20 @@ export const PlayerView = () => {
   const [startAtOverride, setStartAtOverride] = useState(null)
   const [showResumeBanner, setShowResumeBanner] = useState(true)
 
-  // Hardware Media & Display Controls (Supported on Android and Web)
+  // Sleek In-App VLC & Samsung Gesture UI (All disappear in <= 1 second)
   const [brightness, setBrightness] = useState(1.0) // 0.25 to 1.5
-  const [hudState, setHudState] = useState(null) // { type, value, label }
+  const [brightnessPill, setBrightnessPill] = useState(null) // { percent }
+  const [volumePill, setVolumePill] = useState(null) // { percent }
+  const [seekPill, setSeekPill] = useState(null) // { direction: 'back' | 'forward' }
+  const [playPausePill, setPlayPausePill] = useState(null) // { action: 'play' | 'pause' }
+  const isVideoPausedRef = useRef(false)
 
   const playerContainerRef = useRef(null)
   const iframeRef = useRef(null)
-  const hudTimerRef = useRef(null)
+  const brightnessTimerRef = useRef(null)
+  const volumeTimerRef = useRef(null)
+  const seekTimerRef = useRef(null)
+  const playPauseTimerRef = useRef(null)
 
   const isNative = Capacitor.isNativePlatform()
   const isTv = currentPlaying?.media_type === 'tv'
@@ -70,13 +79,37 @@ export const PlayerView = () => {
       ? startAtOverride
       : (currentPlaying?.startAt && currentPlaying.startAt > 15 ? currentPlaying.startAt : 0)
 
-  // Display temporary on-screen VLC HUD (Sun, Volume, Play, Pause, Seek)
-  const triggerHud = (type, value, label) => {
-    if (hudTimerRef.current) clearTimeout(hudTimerRef.current)
-    setHudState({ type, value, label })
-    hudTimerRef.current = setTimeout(() => {
-      setHudState(null)
-    }, 1200)
+  // Unobtrusive in-app VLC & Samsung indicators (Auto-fade in <= 1 second)
+  const triggerBrightnessPill = (percent) => {
+    if (brightnessTimerRef.current) clearTimeout(brightnessTimerRef.current)
+    setBrightnessPill({ percent })
+    brightnessTimerRef.current = setTimeout(() => {
+      setBrightnessPill(null)
+    }, 1000)
+  }
+
+  const triggerVolumePill = (percent) => {
+    if (volumeTimerRef.current) clearTimeout(volumeTimerRef.current)
+    setVolumePill({ percent })
+    volumeTimerRef.current = setTimeout(() => {
+      setVolumePill(null)
+    }, 1000)
+  }
+
+  const triggerSeekPill = (direction) => {
+    if (seekTimerRef.current) clearTimeout(seekTimerRef.current)
+    setSeekPill({ direction })
+    seekTimerRef.current = setTimeout(() => {
+      setSeekPill(null)
+    }, 1000)
+  }
+
+  const triggerPlayPausePill = (action) => {
+    if (playPauseTimerRef.current) clearTimeout(playPauseTimerRef.current)
+    setPlayPausePill({ action })
+    playPauseTimerRef.current = setTimeout(() => {
+      setPlayPausePill(null)
+    }, 1000)
   }
 
   // Activate Native VLC Gestures on Android & synchronize physical video bounds
@@ -112,11 +145,20 @@ export const PlayerView = () => {
     window.onNativeBrightnessChanged = (percent) => {
       const bVal = Math.max(0.25, Math.min(1.5, percent / 100))
       setBrightness(bVal)
-      triggerHud('brightness', percent, `${percent}%`)
+      triggerBrightnessPill(percent)
+    }
+
+    window.onNativeVolumeChanged = (percent) => {
+      triggerVolumePill(percent)
     }
 
     window.onNativePlayPause = () => {
-      triggerHud('play-pause', null, 'Play / Pause')
+      isVideoPausedRef.current = !isVideoPausedRef.current
+      const action = isVideoPausedRef.current ? 'pause' : 'play'
+      triggerPlayPausePill(action)
+      if (action === 'play') {
+        setShowResumeBanner(false)
+      }
       try {
         if (iframeRef.current?.contentWindow) {
           iframeRef.current.contentWindow.postMessage({ type: 'NERO_PLAY_PAUSE' }, '*')
@@ -127,7 +169,7 @@ export const PlayerView = () => {
     }
 
     window.onNativeSeek = (delta) => {
-      triggerHud(delta < 0 ? 'seek-back' : 'seek-forward', null, delta < 0 ? '-10s' : '+10s')
+      triggerSeekPill(delta < 0 ? 'back' : 'forward')
       try {
         if (iframeRef.current?.contentWindow) {
           iframeRef.current.contentWindow.postMessage({ type: 'NERO_SEEK', delta }, '*')
@@ -137,16 +179,35 @@ export const PlayerView = () => {
       }
     }
 
+    // Ensure audio starts unmuted and at 100% volume
+    const unmuteT1 = setTimeout(() => {
+      try {
+        iframeRef.current?.contentWindow?.postMessage({ type: 'NERO_UNMUTE' }, '*')
+      } catch (e) {}
+    }, 500)
+    const unmuteT2 = setTimeout(() => {
+      try {
+        iframeRef.current?.contentWindow?.postMessage({ type: 'NERO_UNMUTE' }, '*')
+      } catch (e) {}
+    }, 1500)
+
     return () => {
       cancelAnimationFrame(rAF)
       clearTimeout(t1)
       clearTimeout(t2)
+      clearTimeout(unmuteT1)
+      clearTimeout(unmuteT2)
+      if (brightnessTimerRef.current) clearTimeout(brightnessTimerRef.current)
+      if (volumeTimerRef.current) clearTimeout(volumeTimerRef.current)
+      if (seekTimerRef.current) clearTimeout(seekTimerRef.current)
+      if (playPauseTimerRef.current) clearTimeout(playPauseTimerRef.current)
       window.removeEventListener('resize', updateVideoBounds)
       window.removeEventListener('scroll', updateVideoBounds)
       if (window.AndroidMediaBridge?.setPlayerActive) {
         window.AndroidMediaBridge.setPlayerActive(false)
       }
       delete window.onNativeBrightnessChanged
+      delete window.onNativeVolumeChanged
       delete window.onNativePlayPause
       delete window.onNativeSeek
     }
@@ -571,50 +632,78 @@ export const PlayerView = () => {
             allowFullScreen
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen"
             referrerPolicy="origin"
+            onLoad={() => {
+              try {
+                iframeRef.current?.contentWindow?.postMessage({ type: 'NERO_UNMUTE' }, '*')
+              } catch (e) {}
+            }}
             {...(sandboxConfig.value ? { sandbox: sandboxConfig.value } : {})}
           />
 
-          {/* VLC-Style On-Screen HUD (Pointer-events-none: never blocks touches) */}
-          {hudState && isNative && (
-            <div className="absolute inset-0 z-30 pointer-events-none flex items-center justify-center animate-in zoom-in-90 fade-in duration-150">
-              {/* Brightness HUD (Sun icon + percentage) */}
-              {hudState.type === 'brightness' && (
-                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-2xl p-4 flex flex-col items-center gap-2 shadow-2xl text-white">
-                  <Sun className="w-8 h-8 text-amber-400 animate-pulse" />
-                  <div className="w-24 h-2 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
-                    <div
-                      className="h-full bg-amber-400 transition-all duration-100"
-                      style={{ width: `${Math.min(100, Math.max(0, (brightness / 1.5) * 100))}%` }}
-                    />
-                  </div>
-                  <span className="text-xs font-mono font-bold text-amber-300">
-                    Brightness {hudState.label}
-                  </span>
+          {/* VLC-Style Sleek Vertical Brightness Pill (Left Edge, <= 1s) */}
+          {brightnessPill && isNative && (
+            <div className="absolute left-4 sm:left-6 top-1/2 -translate-y-1/2 z-40 pointer-events-none animate-in fade-in duration-100">
+              <div className="w-6 sm:w-7 h-32 sm:h-36 bg-black/65 backdrop-blur-md border border-white/20 rounded-full p-1 flex flex-col justify-end items-center shadow-2xl relative overflow-hidden">
+                <div
+                  className="w-full bg-gradient-to-t from-sky-400 to-sky-300 rounded-full transition-all duration-75"
+                  style={{ height: `${Math.max(6, Math.min(100, brightnessPill.percent))}%` }}
+                />
+                <div className="absolute bottom-2 flex items-center justify-center pointer-events-none">
+                  <Sun className="w-3.5 h-3.5 text-white drop-shadow" />
                 </div>
-              )}
+              </div>
+            </div>
+          )}
 
-              {/* Play / Pause HUD */}
-              {hudState.type === 'play-pause' && (
-                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-full p-5 shadow-2xl text-white">
-                  <Play className="w-10 h-10 text-rose-500 fill-current animate-pulse" />
+          {/* VLC-Style Sleek Vertical Volume Pill (Right Edge, <= 1s) */}
+          {volumePill && isNative && (
+            <div className="absolute right-4 sm:right-6 top-1/2 -translate-y-1/2 z-40 pointer-events-none animate-in fade-in duration-100">
+              <div className="w-6 sm:w-7 h-32 sm:h-36 bg-black/65 backdrop-blur-md border border-white/20 rounded-full p-1 flex flex-col justify-end items-center shadow-2xl relative overflow-hidden">
+                <div
+                  className="w-full bg-gradient-to-t from-rose-500 to-rose-400 rounded-full transition-all duration-75"
+                  style={{ height: `${Math.max(6, Math.min(100, volumePill.percent))}%` }}
+                />
+                <div className="absolute bottom-2 flex items-center justify-center pointer-events-none">
+                  {volumePill.percent === 0 ? (
+                    <VolumeX className="w-3.5 h-3.5 text-white/80 drop-shadow" />
+                  ) : (
+                    <Volume2 className="w-3.5 h-3.5 text-white drop-shadow" />
+                  )}
                 </div>
-              )}
+              </div>
+            </div>
+          )}
 
-              {/* -10s Seek HUD */}
-              {hudState.type === 'seek-back' && (
-                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-full p-5 flex flex-col items-center gap-1 shadow-2xl text-white">
-                  <RotateCcw className="w-10 h-10 text-rose-500 animate-spin" />
-                  <span className="text-sm font-bold font-mono text-rose-300">-10s</span>
-                </div>
-              )}
+          {/* Samsung-Style 10s Rewind Pill (Left Side, <= 1s) */}
+          {seekPill?.direction === 'back' && isNative && (
+            <div className="absolute left-6 sm:left-12 top-1/2 -translate-y-1/2 z-40 pointer-events-none animate-in fade-in zoom-in-95 duration-150">
+              <div className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-black/75 backdrop-blur-md border border-white/15 text-white shadow-2xl font-semibold text-xs tracking-wide">
+                <RotateCcw className="w-4 h-4 text-rose-400" />
+                <span>10s</span>
+              </div>
+            </div>
+          )}
 
-              {/* +10s Seek HUD */}
-              {hudState.type === 'seek-forward' && (
-                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-full p-5 flex flex-col items-center gap-1 shadow-2xl text-white">
-                  <RotateCw className="w-10 h-10 text-rose-500 animate-spin" />
-                  <span className="text-sm font-bold font-mono text-rose-300">+10s</span>
-                </div>
-              )}
+          {/* Samsung-Style 10s Forward Pill (Right Side, <= 1s) */}
+          {seekPill?.direction === 'forward' && isNative && (
+            <div className="absolute right-6 sm:right-12 top-1/2 -translate-y-1/2 z-40 pointer-events-none animate-in fade-in zoom-in-95 duration-150">
+              <div className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-black/75 backdrop-blur-md border border-white/15 text-white shadow-2xl font-semibold text-xs tracking-wide">
+                <span>10s</span>
+                <RotateCw className="w-4 h-4 text-rose-400" />
+              </div>
+            </div>
+          )}
+
+          {/* Samsung-Style Play/Pause Quick Indicator (Center, <= 1s) */}
+          {playPausePill && isNative && (
+            <div className="absolute inset-0 z-40 pointer-events-none flex items-center justify-center animate-in zoom-in-90 fade-in duration-100">
+              <div className="p-3.5 rounded-full bg-black/65 backdrop-blur-md border border-white/15 text-white shadow-2xl">
+                {playPausePill.action === 'play' ? (
+                  <Play className="w-7 h-7 text-white fill-current translate-x-0.5" />
+                ) : (
+                  <Pause className="w-7 h-7 text-white fill-current" />
+                )}
+              </div>
             </div>
           )}
         </div>
