@@ -13,7 +13,8 @@ export const MediaCard = ({ item }) => {
   const posterUrl = tmdb.getImageUrl(item.poster_path, 'w500')
   const bookmarked = isBookmarked(item.id, item.media_type)
 
-  const hasProgress = item.progressPercent && item.progressPercent > 0
+  const hasProgress =
+    (item.progressPercent && item.progressPercent > 0) || (item.currentTime && item.currentTime > 15)
   const remainingMins =
     item.duration && item.currentTime
       ? Math.max(1, Math.round((item.duration - item.currentTime) / 60))
@@ -34,9 +35,19 @@ export const MediaCard = ({ item }) => {
     openDetails(item)
   }
 
+  // When card has progress (Continue Watching), skip details popup and jump straight into streaming!
+  const handleCardClick = (e) => {
+    e.stopPropagation()
+    if (hasProgress) {
+      playMedia(item, item.season || 1, item.episode || 1, item.currentTime || 0)
+    } else {
+      openDetails(item)
+    }
+  }
+
   return (
     <div
-      onClick={handleOpenDetails}
+      onClick={handleCardClick}
       className="group relative flex flex-col shrink-0 w-36 sm:w-44 md:w-52 cursor-pointer select-none"
     >
       {/* Poster Image Container */}

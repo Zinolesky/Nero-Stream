@@ -20,6 +20,10 @@ import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
+import java.util.Collections;
+import java.util.HashSet;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.BridgeWebChromeClient;
 import com.getcapacitor.BridgeWebViewClient;
@@ -33,6 +37,13 @@ public class MainActivity extends BridgeActivity {
     // VLC-Style Gesture State
     private GestureDetector gestureDetector;
     private boolean isPlayerActive = false;
+    private boolean isFullscreenMode = false;
+    private boolean isSimulatingTouch = false;
+    private int videoLeft = 0;
+    private int videoTop = 0;
+    private int videoRight = 0;
+    private int videoBottom = 0;
+
     private float volumeAccumulator = 0f;
     private float currentBrightness = 0.6f;
     private static final float VOLUME_SCROLL_STEP = 32f; // Pixels per volume notch
@@ -53,6 +64,17 @@ public class MainActivity extends BridgeActivity {
         public void setPlayerActive(boolean active) {
             isPlayerActive = active;
             Log.d(TAG, "Native player active state: " + active);
+        }
+
+        @JavascriptInterface
+        public void setVideoBounds(int l, int t, int r, int b, boolean fullscreen) {
+            videoLeft = l;
+            videoTop = t;
+            videoRight = r;
+            videoBottom = b;
+            isFullscreenMode = fullscreen;
+            isPlayerActive = true;
+            Log.d(TAG, "Video bounds set: (" + l + ", " + t + ") to (" + r + ", " + b + "), fullscreen=" + fullscreen);
         }
 
         @JavascriptInterface
@@ -113,49 +135,57 @@ public class MainActivity extends BridgeActivity {
             public boolean onDoubleTap(MotionEvent e) {
                 if (!isPlayerActive) return false;
 
-                int screenHeight = getWindow().getDecorView().getHeight();
-                // Pass bottom 22% (control bar with scrubber/buttons) straight to player
-                if (screenHeight > 0 && e.getY() > screenHeight * 0.78f) {
+                int vWidth = isFullscreenMode ? getWindow().getDecorView().getWidth() : Math.max(1, videoRight - videoLeft);
+                int vHeight = isFullscreenMode ? getWindow().getDecorView().getHeight() : Math.max(1, videoBottom - videoTop);
+                float relX = isFullscreenMode ? e.getX() : (e.getX() - videoLeft);
+                float relY = isFullscreenMode ? e.getY() : (e.getY() - videoTop);
+
+                // Pass bottom 22% (timeline scrubber, audio, subtitles) straight to player
+                if (relY > vHeight * 0.78f) {
                     return false;
                 }
 
-                int screenWidth = getWindow().getDecorView().getWidth();
-                float x = e.getX();
-
-                if (x < screenWidth * 0.35f) {
+                if (relX < vWidth * 0.35f) {
                     // Double tap LEFT: Rewind 10s
                     Log.d(TAG, "VLC Gesture: Double-tap Left (-10s)");
                     triggerSeek(-10);
-                    return true; // Consumes event! Prevents iframe from receiving dblclick & toggling fullscreen
-                } else if (x > screenWidth * 0.65f) {
+                    return true; // Consumes event so iframe never receives dblclick
+                } else if (relX > vWidth * 0.65f) {
                     // Double tap RIGHT: Skip 10s
                     Log.d(TAG, "VLC Gesture: Double-tap Right (+10s)");
                     triggerSeek(10);
-                    return true; // Consumes event!
+                    return true; // Consumes event
                 } else {
                     // Double tap CENTER: Toggle Play / Pause!
                     Log.d(TAG, "VLC Gesture: Double-tap Center (Play/Pause)");
                     triggerPlayPause();
-                    return true; // Consumes event! VidLink will NEVER toggle fullscreen on double-tap!
+                    return true; // Consumes event, completely preventing fullscreen toggle!
                 }
+            }
+
+            @Override
+            public boolean onDoubleTapEvent(MotionEvent e) {
+                return isPlayerActive; // Consume all motion events related to double tap
             }
 
             @Override
             public boolean onScroll(MotionEvent e1, MotionEvent e2, float distanceX, float distanceY) {
                 if (!isPlayerActive || e1 == null || e2 == null) return false;
 
-                int screenHeight = getWindow().getDecorView().getHeight();
+                int vWidth = isFullscreenMode ? getWindow().getDecorView().getWidth() : Math.max(1, videoRight - videoLeft);
+                int vHeight = isFullscreenMode ? getWindow().getDecorView().getHeight() : Math.max(1, videoBottom - videoTop);
+                float relY = isFullscreenMode ? e1.getY() : (e1.getY() - videoTop);
+
                 // Pass bottom 22% straight through to timeline scrubber
-                if (screenHeight > 0 && e1.getY() > screenHeight * 0.78f) {
+                if (relY > vHeight * 0.78f) {
                     return false;
                 }
 
                 // Only intercept vertical gestures (VLC style)
                 if (Math.abs(distanceY) > Math.abs(distanceX) * 1.15f) {
-                    int screenWidth = getWindow().getDecorView().getWidth();
-                    float startX = e1.getX();
+                    float relX = isFullscreenMode ? e1.getX() : (e1.getX() - videoLeft);
 
-                    if (startX < screenWidth * 0.5f) {
+                    if (relX < vWidth * 0.5f) {
                         // LEFT SIDE: Brightness
                         handleBrightnessScroll(distanceY);
                         return true;
@@ -182,7 +212,7 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void handleBrightnessScroll(float distanceY) {
-        int height = getWindow().getDecorView().getHeight();
+        int height = isFullscreenMode ? getWindow().getDecorView().getHeight() : Math.max(1, videoBottom - videoTop);
         if (height <= 0) height = 1000;
         float step = (distanceY / (float) height) * 1.2f;
         currentBrightness = Math.max(0.05f, Math.min(1.0f, currentBrightness + step));
@@ -212,23 +242,25 @@ public class MainActivity extends BridgeActivity {
             WebView webView = getBridge().getWebView();
             long now = SystemClock.uptimeMillis();
 
-            // 1. Dispatch Spacebar Key Event
-            webView.dispatchKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_SPACE, 0));
-            webView.dispatchKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_SPACE, 0));
+            // 1. Calculate exact center coordinates of the video box
+            float cx = isFullscreenMode ? (webView.getWidth() / 2.0f) : ((videoLeft + videoRight) / 2.0f);
+            float cy = isFullscreenMode ? (webView.getHeight() / 2.0f) : ((videoTop + videoBottom) / 2.0f);
 
-            // 2. Dispatch simulated single tap at center of screen to toggle Play/Pause natively
-            int w = webView.getWidth();
-            int h = webView.getHeight();
-            float cx = w / 2.0f;
-            float cy = h / 2.0f;
+            // 2. Dispatch simulated single tap at the video center (without triggering gesture loop)
+            isSimulatingTouch = true;
             MotionEvent down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, cx, cy, 0);
-            MotionEvent up = MotionEvent.obtain(now, now + 40, MotionEvent.ACTION_UP, cx, cy, 0);
+            MotionEvent up = MotionEvent.obtain(now, now + 35, MotionEvent.ACTION_UP, cx, cy, 0);
             webView.dispatchTouchEvent(down);
             webView.dispatchTouchEvent(up);
             down.recycle();
             up.recycle();
+            isSimulatingTouch = false;
 
-            // 3. Notify React HUD
+            // 3. Dispatch Spacebar Key Event
+            webView.dispatchKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_SPACE, 0));
+            webView.dispatchKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_SPACE, 0));
+
+            // 4. Notify React to forward postMessage into iframe and trigger HUD
             webView.evaluateJavascript("window.onNativePlayPause && window.onNativePlayPause();", null);
         }
     }
@@ -237,20 +269,57 @@ public class MainActivity extends BridgeActivity {
         if (getBridge() != null && getBridge().getWebView() != null) {
             WebView webView = getBridge().getWebView();
             long now = SystemClock.uptimeMillis();
-            int keyCode = delta < 0 ? KeyEvent.KEYCODE_DPAD_LEFT : KeyEvent.KEYCODE_DPAD_RIGHT;
+            int vWidth = isFullscreenMode ? webView.getWidth() : Math.max(1, videoRight - videoLeft);
+            int vHeight = isFullscreenMode ? webView.getHeight() : Math.max(1, videoBottom - videoTop);
 
-            // Dispatch Arrow Key Event
+            // 1. Click VidLink's native on-screen [-10] or [+10] skip button directly!
+            // Left button is at ~33% width, 50% height; Right button is at ~67% width, 50% height
+            float clickX = delta < 0
+                ? (isFullscreenMode ? (vWidth * 0.33f) : (videoLeft + vWidth * 0.33f))
+                : (isFullscreenMode ? (vWidth * 0.67f) : (videoLeft + vWidth * 0.67f));
+            float clickY = isFullscreenMode ? (vHeight * 0.50f) : (videoTop + vHeight * 0.50f);
+
+            isSimulatingTouch = true;
+            MotionEvent down = MotionEvent.obtain(now, now, MotionEvent.ACTION_DOWN, clickX, clickY, 0);
+            MotionEvent up = MotionEvent.obtain(now, now + 35, MotionEvent.ACTION_UP, clickX, clickY, 0);
+            webView.dispatchTouchEvent(down);
+            webView.dispatchTouchEvent(up);
+            down.recycle();
+            up.recycle();
+            isSimulatingTouch = false;
+
+            // 2. Dispatch Arrow Key Event (DPAD Left/Right)
+            int keyCode = delta < 0 ? KeyEvent.KEYCODE_DPAD_LEFT : KeyEvent.KEYCODE_DPAD_RIGHT;
             webView.dispatchKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0));
             webView.dispatchKeyEvent(new KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0));
 
-            // Notify React HUD
+            // 3. Notify React to send postMessage and update HUD
             webView.evaluateJavascript("window.onNativeSeek && window.onNativeSeek(" + delta + ");", null);
         }
     }
 
     @Override
     public boolean dispatchTouchEvent(MotionEvent ev) {
-        if (isPlayerActive && gestureDetector != null) {
+        if (isSimulatingTouch) {
+            return super.dispatchTouchEvent(ev);
+        }
+
+        // Restrict gestures ONLY to the video player area
+        boolean isInsideVideo = false;
+        if (isPlayerActive) {
+            if (isFullscreenMode) {
+                isInsideVideo = true;
+            } else {
+                float x = ev.getX();
+                float y = ev.getY();
+                if (x >= videoLeft && x <= videoRight && y >= videoTop && y <= videoBottom) {
+                    isInsideVideo = true;
+                }
+            }
+        }
+
+        // Only intercept touches that occur directly over the video
+        if (isInsideVideo && gestureDetector != null) {
             boolean handled = gestureDetector.onTouchEvent(ev);
             if (ev.getAction() == MotionEvent.ACTION_UP || ev.getAction() == MotionEvent.ACTION_CANCEL) {
                 volumeAccumulator = 0;
@@ -259,6 +328,8 @@ public class MainActivity extends BridgeActivity {
                 return true;
             }
         }
+
+        // All other touches (metadata, episodes, cast, buttons below video) pass straight through!
         return super.dispatchTouchEvent(ev);
     }
 
@@ -282,6 +353,64 @@ public class MainActivity extends BridgeActivity {
                 webView.addJavascriptInterface(new NativeMediaBridge(this), "AndroidMediaBridge");
                 Log.i(TAG, "Attached AndroidMediaBridge to WebView.");
 
+                // Inject cross-frame media controller script into all frames (including cross-origin iframes)
+                try {
+                    if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                        String mediaScript = "(function() {" +
+                            "function findVids() {" +
+                            "    var list = Array.from(document.querySelectorAll('video'));" +
+                            "    var ifrs = document.querySelectorAll('iframe');" +
+                            "    ifrs.forEach(function(f) {" +
+                            "        try { if (f.contentDocument) {" +
+                            "            var sub = f.contentDocument.querySelectorAll('video');" +
+                            "            sub.forEach(function(sv) { list.push(sv); });" +
+                            "        }} catch(e){}" +
+                            "    });" +
+                            "    return list;" +
+                            "}" +
+                            "window.addEventListener('message', function(ev) {" +
+                            "    if (!ev.data) return;" +
+                            "    var vids = findVids();" +
+                            "    if (ev.data.type === 'NERO_PLAY_PAUSE' || ev.data.type === 'TOGGLE_PLAY') {" +
+                            "        if (vids.length > 0) {" +
+                            "            vids.forEach(function(v) { if (v.paused) v.play().catch(function(){}); else v.pause(); });" +
+                            "        } else {" +
+                            "            var btn = document.querySelector('button[data-plyr=\"play\"], .plyr__control--overlaid, .vjs-big-play-button, .vjs-play-control, [aria-label*=\"Play\" i], [aria-label*=\"Pause\" i], .play-btn, .play-button');" +
+                            "            if (btn) btn.click();" +
+                            "        }" +
+                            "    } else if (ev.data.type === 'NERO_SEEK') {" +
+                            "        var d = Number(ev.data.delta) || 0;" +
+                            "        if (vids.length > 0) {" +
+                            "            vids.forEach(function(v) {" +
+                            "                var t = Math.max(0, (v.currentTime || 0) + d);" +
+                            "                if (v.duration && !isNaN(v.duration)) t = Math.min(t, v.duration);" +
+                            "                v.currentTime = t;" +
+                            "            });" +
+                            "        } else {" +
+                            "            var btn = d < 0" +
+                            "                ? document.querySelector('button[data-plyr=\"rewind\"], [aria-label*=\"rewind\" i], [aria-label*=\"10s\" i], .rewind-btn')" +
+                            "                : document.querySelector('button[data-plyr=\"fast-forward\"], [aria-label*=\"forward\" i], [aria-label*=\"skip\" i], .forward-btn');" +
+                            "            if (btn) btn.click();" +
+                            "        }" +
+                            "    }" +
+                            "    var childIfrs = document.querySelectorAll('iframe');" +
+                            "    for (var i = 0; i < childIfrs.length; i++) {" +
+                            "        try { childIfrs[i].contentWindow.postMessage(ev.data, '*'); } catch(err){}" +
+                            "    }" +
+                            "});" +
+                            "})();";
+
+                        WebViewCompat.addDocumentStartJavaScript(
+                            webView,
+                            mediaScript,
+                            new HashSet<>(Collections.singletonList("*"))
+                        );
+                        Log.i(TAG, "Injected cross-frame media script via WebViewCompat.");
+                    }
+                } catch (Exception scriptEx) {
+                    Log.w(TAG, "Could not inject cross-frame script: " + scriptEx.getMessage());
+                }
+
                 // Configure WebChromeClient with popup blocking AND native Fullscreen Landscape handling
                 webView.setWebChromeClient(new BridgeWebChromeClient(getBridge()) {
                     @Override
@@ -299,6 +428,7 @@ public class MainActivity extends BridgeActivity {
 
                         customView = view;
                         customViewCallback = callback;
+                        isFullscreenMode = true;
 
                         // Rotate to Landscape for optimal full-screen viewing
                         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
@@ -320,6 +450,7 @@ public class MainActivity extends BridgeActivity {
                     @Override
                     public void onHideCustomView() {
                         if (customView == null) return;
+                        isFullscreenMode = false;
 
                         // Restore orientation and system bars
                         setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);

@@ -25,9 +25,6 @@ import {
   AlertTriangle,
   Clock,
   Sun,
-  Volume2,
-  VolumeX,
-  Volume1,
   Play,
   Pause,
 } from 'lucide-react'
@@ -56,7 +53,6 @@ export const PlayerView = () => {
 
   // Hardware Media & Display Controls (Supported on Android and Web)
   const [brightness, setBrightness] = useState(1.0) // 0.25 to 1.5
-  const [volumeLevel, setVolumeLevel] = useState(70) // 0 to 100
   const [hudState, setHudState] = useState(null) // { type, value, label }
 
   const playerContainerRef = useRef(null)
@@ -83,11 +79,34 @@ export const PlayerView = () => {
     }, 1200)
   }
 
-  // Activate Native VLC Gestures on Android when Player is Open
+  // Activate Native VLC Gestures on Android & synchronize physical video bounds
   useEffect(() => {
     if (window.AndroidMediaBridge?.setPlayerActive) {
       window.AndroidMediaBridge.setPlayerActive(true)
     }
+
+    const updateVideoBounds = () => {
+      if (playerContainerRef.current && window.AndroidMediaBridge?.setVideoBounds) {
+        const rect = playerContainerRef.current.getBoundingClientRect()
+        const dpr = window.devicePixelRatio || 1
+        window.AndroidMediaBridge.setVideoBounds(
+          Math.round(rect.left * dpr),
+          Math.round(rect.top * dpr),
+          Math.round(rect.right * dpr),
+          Math.round(rect.bottom * dpr),
+          isFullscreen
+        )
+      }
+    }
+
+    // Measure immediately and after short layout settle delays
+    updateVideoBounds()
+    const rAF = requestAnimationFrame(updateVideoBounds)
+    const t1 = setTimeout(updateVideoBounds, 250)
+    const t2 = setTimeout(updateVideoBounds, 600)
+
+    window.addEventListener('resize', updateVideoBounds)
+    window.addEventListener('scroll', updateVideoBounds, { passive: true })
 
     // Register native gesture event listeners from Android MainActivity
     window.onNativeBrightnessChanged = (percent) => {
@@ -98,13 +117,32 @@ export const PlayerView = () => {
 
     window.onNativePlayPause = () => {
       triggerHud('play-pause', null, 'Play / Pause')
+      try {
+        if (iframeRef.current?.contentWindow) {
+          iframeRef.current.contentWindow.postMessage({ type: 'NERO_PLAY_PAUSE' }, '*')
+        }
+      } catch (err) {
+        console.warn('Could not post NERO_PLAY_PAUSE message', err)
+      }
     }
 
     window.onNativeSeek = (delta) => {
       triggerHud(delta < 0 ? 'seek-back' : 'seek-forward', null, delta < 0 ? '-10s' : '+10s')
+      try {
+        if (iframeRef.current?.contentWindow) {
+          iframeRef.current.contentWindow.postMessage({ type: 'NERO_SEEK', delta }, '*')
+        }
+      } catch (err) {
+        console.warn('Could not post NERO_SEEK message', err)
+      }
     }
 
     return () => {
+      cancelAnimationFrame(rAF)
+      clearTimeout(t1)
+      clearTimeout(t2)
+      window.removeEventListener('resize', updateVideoBounds)
+      window.removeEventListener('scroll', updateVideoBounds)
       if (window.AndroidMediaBridge?.setPlayerActive) {
         window.AndroidMediaBridge.setPlayerActive(false)
       }
@@ -112,21 +150,7 @@ export const PlayerView = () => {
       delete window.onNativePlayPause
       delete window.onNativeSeek
     }
-  }, [])
-
-  // Fetch initial native Android hardware volume if available
-  useEffect(() => {
-    if (window.AndroidMediaBridge?.getVolume) {
-      try {
-        const nativeVol = window.AndroidMediaBridge.getVolume()
-        if (typeof nativeVol === 'number' && nativeVol >= 0) {
-          setVolumeLevel(nativeVol)
-        }
-      } catch (e) {
-        console.warn('Could not read native Android volume', e)
-      }
-    }
-  }, [])
+  }, [isFullscreen])
 
   // Fetch full TMDB metadata (cast, seasons, genres, runtimes)
   useEffect(() => {
@@ -211,33 +235,6 @@ export const PlayerView = () => {
     if (currentEpisode > 1) {
       setStartAtOverride(0)
       updatePlayingEpisode(currentSeason, currentEpisode - 1)
-    }
-  }
-
-  // Hardware Volume Controls (Directly alters Android AudioManager volume on device)
-  const handleVolumeAdjust = (direction) => {
-    const step = direction > 0 ? 10 : -10
-    const newVol = Math.max(0, Math.min(100, volumeLevel + step))
-    setVolumeLevel(newVol)
-
-    if (window.AndroidMediaBridge?.adjustVolume) {
-      window.AndroidMediaBridge.adjustVolume(direction > 0 ? 1 : -1)
-    }
-  }
-
-  const handleVolumeSet = (val) => {
-    setVolumeLevel(val)
-    if (window.AndroidMediaBridge?.setVolume) {
-      window.AndroidMediaBridge.setVolume(val)
-    }
-  }
-
-  // Brightness Control (CSS Filter + Native Android screen brightness)
-  const handleBrightnessChange = (val) => {
-    setBrightness(val)
-    if (window.AndroidMediaBridge?.setScreenBrightness) {
-      const mapped = Math.max(0.05, Math.min(1.0, (val - 0.25) / 1.25))
-      window.AndroidMediaBridge.setScreenBrightness(mapped)
     }
   }
 
@@ -620,71 +617,6 @@ export const PlayerView = () => {
               )}
             </div>
           )}
-        </div>
-
-        {/* Hardware Volume & Display Control Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/80 border border-slate-800/80 rounded-xl px-4 py-2.5 text-xs text-slate-300 shadow-md">
-          {/* Real Device Volume (Native Android AudioManager & Web) */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => handleVolumeAdjust(-1)}
-              className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-              title="Lower Volume"
-            >
-              {volumeLevel === 0 ? <VolumeX className="w-3.5 h-3.5 text-rose-400" /> : <Volume1 className="w-3.5 h-3.5 text-slate-400" />}
-            </button>
-
-            <span className="text-slate-400 font-medium text-xs">
-              {isNative ? 'Device Volume:' : 'Volume:'}
-            </span>
-
-            <input
-              type="range"
-              min="0"
-              max="100"
-              step="5"
-              value={volumeLevel}
-              onChange={(e) => handleVolumeSet(parseInt(e.target.value, 10))}
-              className="w-20 sm:w-28 accent-rose-500 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
-              title={`Volume: ${volumeLevel}%`}
-            />
-
-            <button
-              onClick={() => handleVolumeAdjust(1)}
-              className="p-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
-              title="Raise Volume"
-            >
-              <Volume2 className="w-3.5 h-3.5 text-rose-400" />
-            </button>
-
-            <span className="font-mono text-[11px] text-rose-300 w-8 text-right">
-              {volumeLevel}%
-            </span>
-          </div>
-
-          {/* Real Brightness Slider (Container & Android Screen Brightness) */}
-          <div className="flex items-center gap-2">
-            <Sun className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-            <span className="text-slate-400 font-medium text-xs">Brightness:</span>
-            <input
-              type="range"
-              min="0.25"
-              max="1.5"
-              step="0.05"
-              value={brightness}
-              onChange={(e) => handleBrightnessChange(parseFloat(e.target.value))}
-              className="w-20 sm:w-28 accent-amber-400 h-1.5 bg-slate-800 rounded-lg cursor-pointer"
-              title={`Brightness: ${Math.round(brightness * 100)}%`}
-            />
-            <span className="font-mono text-[11px] text-amber-300 w-8 text-right">
-              {Math.round(brightness * 100)}%
-            </span>
-          </div>
-
-          <div className="hidden md:flex items-center gap-1.5 text-slate-400 text-[11px]">
-            <Info className="w-3 h-3 text-rose-400" />
-            <span>{isNative ? 'VLC Gestures active: Swipe left for Brightness, right for Volume, double-tap center to Play/Pause.' : 'Use player controls for play, pause, seek, subtitles, and speed.'}</span>
-          </div>
         </div>
 
         {/* TV Series Episode Drawer */}
