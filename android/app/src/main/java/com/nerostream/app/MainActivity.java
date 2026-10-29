@@ -46,17 +46,23 @@ public class MainActivity extends BridgeActivity {
                 settings.setMediaPlaybackRequiresUserGesture(false);
                 settings.setDomStorageEnabled(true);
 
-                // Inject cross-frame 2x speed controller script into all frames (including cross-origin iframes)
+                // Inject cross-frame media controller script into all frames (including cross-origin iframes)
                 try {
                     if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                         String speedScript = "(function() {" +
                             "window.addEventListener('message', function(event) {" +
                             "    try {" +
-                            "        if (event.data && (event.data.type === 'NERO_SPEED' || event.data.type === 'SET_PLAYBACK_RATE')) {" +
-                            "            var rate = event.data.rate || 1.0;" +
-                            "            var videos = document.querySelectorAll('video');" +
-                            "            for (var i = 0; i < videos.length; i++) {" +
-                            "                videos[i].playbackRate = rate;" +
+                            "        if (!event.data) return;" +
+                            "        var videos = document.querySelectorAll('video');" +
+                            "        for (var i = 0; i < videos.length; i++) {" +
+                            "            var v = videos[i];" +
+                            "            if (event.data.type === 'NERO_SPEED' || event.data.type === 'SET_PLAYBACK_RATE') {" +
+                            "                v.playbackRate = event.data.rate || 1.0;" +
+                            "            } else if (event.data.type === 'NERO_SEEK') {" +
+                            "                if (typeof event.data.time === 'number') v.currentTime = event.data.time;" +
+                            "                else if (typeof event.data.delta === 'number') v.currentTime = Math.max(0, v.currentTime + event.data.delta);" +
+                            "            } else if (event.data.type === 'NERO_TOGGLE_PLAY') {" +
+                            "                if (v.paused) v.play(); else v.pause();" +
                             "            }" +
                             "        }" +
                             "    } catch (e) {}" +
@@ -68,7 +74,7 @@ public class MainActivity extends BridgeActivity {
                             speedScript,
                             new HashSet<>(Collections.singletonList("*"))
                         );
-                        Log.i(TAG, "Cross-frame 2x speed controller script injected via WebViewCompat.");
+                        Log.i(TAG, "Cross-frame media controller script injected via WebViewCompat.");
                     }
                 } catch (Exception scriptEx) {
                     Log.w(TAG, "Could not inject speed script: " + scriptEx.getMessage());

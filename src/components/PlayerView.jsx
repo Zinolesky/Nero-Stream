@@ -70,7 +70,7 @@ export const PlayerView = () => {
   const holdTimerRef = useRef(null)
 
   // Touch tracking refs
-  const touchStartRef = useRef({ x: 0, y: 0, time: 0, initialBrightness: 1.0, initialVolume: 100 })
+  const touchStartRef = useRef({ x: 0, y: 0, time: 0, side: 'left', initialBrightness: 1.0, initialVolume: 100 })
   const lastTapRef = useRef({ time: 0, x: 0, y: 0, side: null })
 
   const isTv = currentPlaying?.media_type === 'tv'
@@ -107,7 +107,6 @@ export const PlayerView = () => {
   useEffect(() => {
     const handleMessage = (event) => {
       try {
-        // VidLink sends { type: "PLAYER_EVENT", data: { event: "timeupdate"|"play"|"pause"|"seeked", currentTime, duration } }
         if (event.data && typeof event.data === 'object') {
           if (event.data.type === 'PLAYER_EVENT' && event.data.data) {
             const { currentTime, duration } = event.data.data
@@ -174,7 +173,7 @@ export const PlayerView = () => {
     }
   }
 
-  // Display temporary gesture HUD (Sun, Volume, Skip, Speed)
+  // Display temporary gesture HUD
   const triggerHud = (type, value, label) => {
     if (hudTimerRef.current) clearTimeout(hudTimerRef.current)
     setHudState({ type, value, label })
@@ -191,9 +190,7 @@ export const PlayerView = () => {
         iframeRef.current.contentWindow.postMessage({ type: 'SET_PLAYBACK_RATE', rate }, '*')
         iframeRef.current.contentWindow.postMessage({ event: 'setPlaybackRate', value: rate }, '*')
         iframeRef.current.contentWindow.postMessage({ api: 'setSpeed', value: rate }, '*')
-      } catch (e) {
-        // Silently catch cross-origin restriction
-      }
+      } catch (e) {}
     }
   }
 
@@ -208,7 +205,7 @@ export const PlayerView = () => {
     }
   }
 
-  // Stop Hold for 2x Speed (return to base speed)
+  // Stop Hold for 2x Speed
   const stopFastForward = () => {
     setIsFastForwarding(false)
     sendSpeedCommand(playbackSpeed)
@@ -282,6 +279,7 @@ export const PlayerView = () => {
     // Notify iframe via postMessage
     if (iframeRef.current?.contentWindow) {
       try {
+        iframeRef.current.contentWindow.postMessage({ type: 'NERO_SEEK', delta: deltaSeconds, time: newTime }, '*')
         iframeRef.current.contentWindow.postMessage({ type: 'SEEK', time: newTime }, '*')
         iframeRef.current.contentWindow.postMessage({ event: 'seek', value: newTime }, '*')
         iframeRef.current.contentWindow.postMessage({ api: 'seek', value: newTime }, '*')
@@ -292,19 +290,6 @@ export const PlayerView = () => {
 
     if (updatePlaybackProgress) {
       updatePlaybackProgress(newTime, totalDuration)
-    }
-  }
-
-  // Toggle Play / Pause
-  const handleTogglePlay = () => {
-    triggerHud('play-pause', null, 'Play / Pause')
-    if (iframeRef.current?.contentWindow) {
-      try {
-        iframeRef.current.contentWindow.postMessage({ type: 'TOGGLE_PLAY' }, '*')
-        iframeRef.current.contentWindow.postMessage({ event: 'togglePlay' }, '*')
-      } catch (e) {
-        console.warn('Could not postMessage toggle play to iframe', e)
-      }
     }
   }
 
@@ -319,25 +304,20 @@ export const PlayerView = () => {
     setIframeKey(Date.now())
   }
 
-  // Gesture Touch Handlers (Double tap, vertical slide, and HOLD FOR 2X SPEED)
-  const handleTouchStart = (e) => {
+  // Zone-specific touch handlers: 'left' | 'right' | 'top'
+  const handleZoneTouchStart = (e, zone) => {
     if (!gesturesEnabled) return
     const touch = e.touches[0]
-    const rect = e.currentTarget.getBoundingClientRect()
+    const rect = playerContainerRef.current?.getBoundingClientRect() || e.currentTarget.getBoundingClientRect()
     const x = touch.clientX - rect.left
     const y = touch.clientY - rect.top
     const now = Date.now()
-
-    // Classify zone: left 38%, right 38%, center 24%
-    let side = 'center'
-    if (x < rect.width * 0.38) side = 'left'
-    else if (x > rect.width * 0.62) side = 'right'
 
     touchStartRef.current = {
       x,
       y,
       time: now,
-      side,
+      side: zone,
       initialBrightness: brightness,
       initialVolume: volume,
     }
@@ -348,42 +328,35 @@ export const PlayerView = () => {
       startFastForward()
     }, 350)
 
-    // Check double-tap
-    const prev = lastTapRef.current
-    if (now - prev.time < 350 && Math.abs(x - prev.x) < 45 && Math.abs(y - prev.y) < 45) {
-      // Cancel hold timer on second tap of a double tap
-      if (holdTimerRef.current) {
-        clearTimeout(holdTimerRef.current)
-        holdTimerRef.current = null
-      }
-
-      if (side === 'left') {
-        // Double-tap left: Go back 10 seconds
-        handleSeek(-10)
-      } else if (side === 'right') {
-        // Double-tap right: Skip 10 seconds
-        handleSeek(10)
+    // Check double-tap on side zones
+    if (zone === 'left' || zone === 'right') {
+      const prev = lastTapRef.current
+      if (now - prev.time < 350 && prev.side === zone && Math.abs(x - prev.x) < 55 && Math.abs(y - prev.y) < 55) {
+        if (holdTimerRef.current) {
+          clearTimeout(holdTimerRef.current)
+          holdTimerRef.current = null
+        }
+        if (zone === 'left') {
+          handleSeek(-10)
+        } else {
+          handleSeek(10)
+        }
+        lastTapRef.current = { time: 0, x: 0, y: 0, side: null }
       } else {
-        // Double-tap center: Play/Pause
-        handleTogglePlay()
+        lastTapRef.current = { time: now, x, y, side: zone }
       }
-      lastTapRef.current = { time: 0, x: 0, y: 0, side: null }
-    } else {
-      lastTapRef.current = { time: now, x, y, side }
     }
   }
 
-  const handleTouchMove = (e) => {
+  const handleZoneTouchMove = (e, zone) => {
     if (!gesturesEnabled) return
     const touch = e.touches[0]
-    const rect = e.currentTarget.getBoundingClientRect()
+    const rect = playerContainerRef.current?.getBoundingClientRect() || e.currentTarget.getBoundingClientRect()
     const currentX = touch.clientX - rect.left
     const currentY = touch.clientY - rect.top
     const deltaX = Math.abs(currentX - touchStartRef.current.x)
     const deltaY = touchStartRef.current.y - currentY // Up is positive
-    const side = touchStartRef.current.side
 
-    // If moved by more than 10px, cancel hold timer and 2x speed
     if (deltaX > 10 || Math.abs(deltaY) > 10) {
       if (holdTimerRef.current) {
         clearTimeout(holdTimerRef.current)
@@ -396,33 +369,28 @@ export const PlayerView = () => {
 
     // Threshold to prevent minor tap jitter from sliding
     if (Math.abs(deltaY) > 8) {
-      if (side === 'left') {
-        // Sliding up and down on the left: Adjust Brightness (0.25 to 1.5)
+      if (zone === 'left') {
         const step = deltaY / (rect.height * 0.8)
         const newBrightness = Math.min(1.5, Math.max(0.25, touchStartRef.current.initialBrightness + step))
         setBrightness(newBrightness)
         triggerHud('brightness', Math.round((newBrightness / 1.5) * 100), `${Math.round(newBrightness * 100)}%`)
-      } else if (side === 'right') {
-        // Sliding up and down on the right: Adjust Volume (0 to 100)
+      } else if (zone === 'right') {
         const step = (deltaY / (rect.height * 0.8)) * 100
         const newVol = Math.min(100, Math.max(0, Math.round(touchStartRef.current.initialVolume + step)))
         setVolume(newVol)
         triggerHud('volume', newVol, `${newVol}%`)
 
-        // Post message to iframe
         if (iframeRef.current?.contentWindow) {
           try {
             iframeRef.current.contentWindow.postMessage({ type: 'SET_VOLUME', volume: newVol / 100 }, '*')
             iframeRef.current.contentWindow.postMessage({ event: 'setVolume', value: newVol / 100 }, '*')
-          } catch (err) {
-            // Silently ignore cross-origin restriction
-          }
+          } catch (err) {}
         }
       }
     }
   }
 
-  const handleTouchEnd = () => {
+  const handleZoneTouchEnd = () => {
     if (holdTimerRef.current) {
       clearTimeout(holdTimerRef.current)
       holdTimerRef.current = null
@@ -432,8 +400,7 @@ export const PlayerView = () => {
     }
   }
 
-  // Mouse handlers for desktop Hold for 2x Speed
-  const handleMouseDown = () => {
+  const handleZoneMouseDown = (zone) => {
     if (!gesturesEnabled) return
     if (holdTimerRef.current) clearTimeout(holdTimerRef.current)
     holdTimerRef.current = setTimeout(() => {
@@ -441,7 +408,7 @@ export const PlayerView = () => {
     }, 350)
   }
 
-  const handleMouseUp = () => {
+  const handleZoneMouseUp = () => {
     if (holdTimerRef.current) {
       clearTimeout(holdTimerRef.current)
       holdTimerRef.current = null
@@ -623,7 +590,7 @@ export const PlayerView = () => {
                   ? 'bg-emerald-950/50 border-emerald-500/50 text-emerald-300'
                   : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
               }`}
-              title={gesturesEnabled ? 'Gestures Active: Hold anywhere for 2x Speed, Swipe sides for Brightness & Volume, Double-tap to Skip 10s' : 'Gestures Disabled: Direct touch mode'}
+              title={gesturesEnabled ? 'Gestures Active: Swipe side zones for Brightness & Volume, Double-tap sides to Skip 10s' : 'Gestures Disabled: Direct touch mode'}
             >
               <Sliders className="w-3.5 h-3.5" />
               <span className="text-[11px] font-semibold">{gesturesEnabled ? 'Gestures: ON' : 'Gestures: OFF'}</span>
@@ -693,7 +660,7 @@ export const PlayerView = () => {
           </div>
         </div>
 
-        {/* Embedded Iframe Player Box with Gesture Layer */}
+        {/* Embedded Iframe Player Box with Smart Gesture Zones */}
         <div
           ref={playerContainerRef}
           className={`relative w-full aspect-video bg-black rounded-2xl overflow-hidden border border-slate-800 shadow-2xl shadow-black/80 transition-all select-none ${
@@ -768,26 +735,55 @@ export const PlayerView = () => {
             {...(sandboxConfig.value ? { sandbox: sandboxConfig.value } : {})}
           />
 
-          {/* Transparent Gesture Controls Overlay Layer */}
+          {/* Gesture Controls Zones (Smart layout: Leaves bottom 24% and center area COMPLETELY open for native buttons & play/pause) */}
           {gesturesEnabled && (
-            <div
-              onTouchStart={handleTouchStart}
-              onTouchMove={handleTouchMove}
-              onTouchEnd={handleTouchEnd}
-              onTouchCancel={handleTouchEnd}
-              onMouseDown={handleMouseDown}
-              onMouseUp={handleMouseUp}
-              onMouseLeave={handleMouseUp}
-              className="absolute inset-0 z-20 pointer-events-auto cursor-pointer"
-              title="Hold anywhere for 2x Speed | Double tap left: -10s | Double tap right: +10s | Swipe left: Brightness | Swipe right: Volume"
-            >
-              {/* Subtle visual hints on sides */}
-              <div className="absolute inset-y-0 left-0 w-[35%] flex items-center justify-start pl-4 pointer-events-none opacity-0 hover:opacity-10 transition-opacity">
-                <RotateCcw className="w-12 h-12 text-white" />
+            <div className="absolute inset-0 pointer-events-none z-20 overflow-hidden">
+              {/* Left Zone: Brightness, -10s double tap, hold for 2x speed (leaves bottom 24% free for controls) */}
+              <div
+                onTouchStart={(e) => handleZoneTouchStart(e, 'left')}
+                onTouchMove={(e) => handleZoneTouchMove(e, 'left')}
+                onTouchEnd={handleZoneTouchEnd}
+                onTouchCancel={handleZoneTouchEnd}
+                onMouseDown={() => handleZoneMouseDown('left')}
+                onMouseUp={handleZoneMouseUp}
+                onMouseLeave={handleZoneMouseUp}
+                className="absolute left-0 top-0 bottom-24 w-[28%] pointer-events-auto flex items-center justify-start pl-3 sm:pl-4 group cursor-pointer"
+                title="Left Zone: Swipe for Brightness | Double-tap for -10s | Hold for 2x Speed"
+              >
+                <div className="p-2 sm:p-2.5 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 opacity-0 group-hover:opacity-75 transition-opacity pointer-events-none">
+                  <RotateCcw className="w-4 sm:w-5 h-4 sm:h-5 text-white/90" />
+                </div>
               </div>
-              <div className="absolute inset-y-0 right-0 w-[35%] flex items-center justify-end pr-4 pointer-events-none opacity-0 hover:opacity-10 transition-opacity">
-                <RotateCw className="w-12 h-12 text-white" />
+
+              {/* Right Zone: Volume, +10s double tap, hold for 2x speed (leaves bottom 24% free for controls) */}
+              <div
+                onTouchStart={(e) => handleZoneTouchStart(e, 'right')}
+                onTouchMove={(e) => handleZoneTouchMove(e, 'right')}
+                onTouchEnd={handleZoneTouchEnd}
+                onTouchCancel={handleZoneTouchEnd}
+                onMouseDown={() => handleZoneMouseDown('right')}
+                onMouseUp={handleZoneMouseUp}
+                onMouseLeave={handleZoneMouseUp}
+                className="absolute right-0 top-0 bottom-24 w-[28%] pointer-events-auto flex items-center justify-end pr-3 sm:pr-4 group cursor-pointer"
+                title="Right Zone: Swipe for Volume | Double-tap for +10s | Hold for 2x Speed"
+              >
+                <div className="p-2 sm:p-2.5 rounded-full bg-black/40 backdrop-blur-sm border border-white/10 opacity-0 group-hover:opacity-75 transition-opacity pointer-events-none">
+                  <RotateCw className="w-4 sm:w-5 h-4 sm:h-5 text-white/90" />
+                </div>
               </div>
+
+              {/* Top Bar Zone: Hold for 2x speed along top edge without blocking center play button */}
+              <div
+                onTouchStart={(e) => handleZoneTouchStart(e, 'top')}
+                onTouchMove={(e) => handleZoneTouchMove(e, 'top')}
+                onTouchEnd={handleZoneTouchEnd}
+                onTouchCancel={handleZoneTouchEnd}
+                onMouseDown={() => handleZoneMouseDown('top')}
+                onMouseUp={handleZoneMouseUp}
+                onMouseLeave={handleZoneMouseUp}
+                className="absolute left-[28%] right-[28%] top-0 h-14 pointer-events-auto flex items-center justify-center cursor-pointer"
+                title="Top Zone: Hold for 2x Speed"
+              />
             </div>
           )}
 
@@ -933,7 +929,7 @@ export const PlayerView = () => {
 
           <div className="hidden lg:flex items-center gap-1.5 text-slate-400 text-[11px]">
             <Info className="w-3 h-3 text-rose-400" />
-            <span>Hold screen for 2x Speed • Swipe left for Brightness • Double-tap sides to skip 10s.</span>
+            <span>Tap middle to Play/Pause • Tap bottom bar for all player controls • Side zones for Brightness & Volume.</span>
           </div>
         </div>
 
