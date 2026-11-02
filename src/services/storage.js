@@ -8,6 +8,8 @@ const STORAGE_KEYS = {
   SANDBOX_MODE: 'nerostream_sandbox_mode',
   HISTORY: 'nerostream_watch_history',
   BOOKMARKS: 'nerostream_bookmarks',
+  ACTIVE_SESSION: 'nerostream_active_session',
+  LAST_ACTIVE_TIME: 'nerostream_last_active_time',
 }
 
 const LEGACY_KEYS = {
@@ -17,6 +19,12 @@ const LEGACY_KEYS = {
   HISTORY: 'streamvault_watch_history',
   BOOKMARKS: 'streamvault_bookmarks',
 }
+
+// Built-in default key ensuring universal access across mobile, web, and all devices
+const DEFAULT_TMDB_API_KEY = '98a688a277f7d48c8b44b3ec48608095'
+
+// Grace period for restoring session on accidental tab close (15 minutes)
+const SESSION_EXPIRY_MS = 15 * 60 * 1000
 
 export const storage = {
   getApiKey: () => {
@@ -31,9 +39,9 @@ export const storage = {
       if (envKey && envKey.trim().length > 10) {
         return envKey.trim()
       }
-      return ''
+      return DEFAULT_TMDB_API_KEY
     } catch {
-      return import.meta.env.VITE_TMDB_API_KEY || ''
+      return import.meta.env.VITE_TMDB_API_KEY || DEFAULT_TMDB_API_KEY
     }
   },
 
@@ -176,5 +184,52 @@ export const storage = {
       console.error('Failed to toggle bookmark', e)
       return { bookmarks: [], isBookmarked: false }
     }
+  },
+
+  // Active Session Persistence (15-Minute Grace Period)
+  saveActiveSession: (sessionData) => {
+    try {
+      if (!sessionData) {
+        localStorage.removeItem(STORAGE_KEYS.ACTIVE_SESSION)
+        return
+      }
+      localStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION, JSON.stringify(sessionData))
+      localStorage.setItem(STORAGE_KEYS.LAST_ACTIVE_TIME, Date.now().toString())
+    } catch (e) {
+      console.warn('Failed to save active session', e)
+    }
+  },
+
+  updateSessionHeartbeat: () => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.LAST_ACTIVE_TIME, Date.now().toString())
+    } catch {}
+  },
+
+  getActiveSession: () => {
+    try {
+      const lastActiveStr = localStorage.getItem(STORAGE_KEYS.LAST_ACTIVE_TIME)
+      const sessionStr = localStorage.getItem(STORAGE_KEYS.ACTIVE_SESSION)
+      if (!lastActiveStr || !sessionStr) return null
+
+      const lastActive = parseInt(lastActiveStr, 10)
+      const now = Date.now()
+
+      // If closed longer than 15 minutes, session has expired!
+      if (now - lastActive > SESSION_EXPIRY_MS) {
+        localStorage.removeItem(STORAGE_KEYS.ACTIVE_SESSION)
+        return null
+      }
+
+      return JSON.parse(sessionStr)
+    } catch {
+      return null
+    }
+  },
+
+  clearActiveSession: () => {
+    try {
+      localStorage.removeItem(STORAGE_KEYS.ACTIVE_SESSION)
+    } catch {}
   },
 }

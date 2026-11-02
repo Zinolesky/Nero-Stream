@@ -12,9 +12,10 @@ export const AppProvider = ({ children }) => {
   const [history, setHistory] = useState(storage.getHistory())
   const [bookmarks, setBookmarks] = useState(storage.getBookmarks())
   
-  // Navigation & Playback State
-  const [activeTab, setActiveTab] = useState('home') // 'home' | 'movies' | 'tv' | 'bookmarks' | 'history'
-  const [currentPlaying, setCurrentPlaying] = useState(null)
+  // Navigation & Playback State (with 15-Minute Graceful Session Recovery)
+  const initialSession = storage.getActiveSession()
+  const [activeTab, setActiveTab] = useState(initialSession?.activeTab || 'home')
+  const [currentPlaying, setCurrentPlaying] = useState(initialSession?.currentPlaying || null)
   const [activeModal, setActiveModal] = useState(null) // 'settings' | 'arch-info' | 'details' | null
   const [selectedDetailsItem, setSelectedDetailsItem] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -28,6 +29,35 @@ export const AppProvider = ({ children }) => {
       setToast(null)
     }, 3500)
   }
+
+  // Notify on restored session
+  useEffect(() => {
+    if (initialSession?.currentPlaying) {
+      showToast('Restored your previous watching session', 'info')
+    }
+  }, [])
+
+  // Persist active session snapshot while watching
+  useEffect(() => {
+    if (currentPlaying) {
+      storage.saveActiveSession({ currentPlaying, activeTab })
+    } else {
+      storage.clearActiveSession()
+    }
+  }, [currentPlaying, activeTab])
+
+  // Periodic heartbeat tracking active tab presence
+  useEffect(() => {
+    const handleHeartbeat = () => storage.updateSessionHeartbeat()
+    const interval = setInterval(handleHeartbeat, 30000)
+    window.addEventListener('beforeunload', handleHeartbeat)
+    window.addEventListener('pagehide', handleHeartbeat)
+    return () => {
+      clearInterval(interval)
+      window.removeEventListener('beforeunload', handleHeartbeat)
+      window.removeEventListener('pagehide', handleHeartbeat)
+    }
+  }, [])
 
   // Active Provider Object
   const activeProvider = PROVIDERS.find((p) => p.id === providerId) || PROVIDERS[0]
@@ -140,6 +170,7 @@ export const AppProvider = ({ children }) => {
 
   const closePlayer = () => {
     setCurrentPlaying(null)
+    storage.clearActiveSession()
   }
 
   const clearHistory = () => {
