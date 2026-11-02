@@ -320,6 +320,12 @@ export const PlayerView = () => {
     setIframeKey(Date.now())
   }
 
+  const handleCycleNextProvider = () => {
+    const currentIndex = PROVIDERS.findIndex((p) => p.id === activeProvider.id)
+    const nextIndex = (currentIndex + 1) % PROVIDERS.length
+    updateProviderId(PROVIDERS[nextIndex].id)
+  }
+
   const handleNextEpisode = () => {
     setStartAtOverride(0)
     updatePlayingEpisode(currentSeason, currentEpisode + 1)
@@ -755,8 +761,17 @@ export const PlayerView = () => {
             </div>
           )}
 
-          {/* Quick Actions: Reload & Landscape Fullscreen */}
+          {/* Quick Actions: Reload, Next Server & Landscape Fullscreen */}
           <div className="flex items-center gap-2">
+            <button
+              onClick={handleCycleNextProvider}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-950 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white transition-colors"
+              title="If stuck loading, switch to next mirror"
+            >
+              <RotateCw className="w-3.5 h-3.5 text-rose-400" />
+              <span className="hidden md:inline">Switch Mirror</span>
+            </button>
+
             <button
               onClick={handleReloadIframe}
               className="p-1.5 text-slate-300 hover:text-white bg-slate-950 border border-slate-800 rounded-lg hover:bg-slate-800 transition-colors"
@@ -950,6 +965,22 @@ export const PlayerView = () => {
             </div>
           </div>
         )}
+
+        {/* Playback Mirror Tip for Buffer / Load Issues */}
+        <div className="flex items-center justify-between text-[11px] text-slate-400 px-3 py-2 bg-slate-900/50 rounded-xl border border-slate-800/80 flex-wrap gap-2">
+          <div className="flex items-center gap-2">
+            <Info className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+            <span>
+              If a specific episode is stuck loading, switch source to <strong className="text-slate-200">VidSrc SH</strong> or a <strong className="text-slate-200">Backup Mirror</strong>.
+            </span>
+          </div>
+          <button
+            onClick={handleCycleNextProvider}
+            className="text-xs font-semibold text-rose-400 hover:text-rose-300 underline underline-offset-2 shrink-0 transition-colors"
+          >
+            Switch to Next Mirror →
+          </button>
+        </div>
 
         {/* TV Series Episode Drawer */}
         {isTv && (
