@@ -54,7 +54,7 @@ export const Navbar = () => {
                 Nero <span className="text-rose-500">Stream</span>
               </span>
               <span className="hidden sm:block text-[9px] uppercase tracking-widest text-slate-400 font-semibold leading-none">
-                Aggregator UI
+                Cinema & TV
               </span>
             </div>
           </div>

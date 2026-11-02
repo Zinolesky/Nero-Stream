@@ -482,15 +482,15 @@ export const PlayerView = () => {
           </div>
         )}
 
-        {/* Server & Controls Toolbar */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
-          {/* Server Switchers */}
-          <div className="flex items-center gap-1.5 flex-wrap">
+        {/* Sleek Stream Control Toolbar (Movie Jungle Style) */}
+        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-2.5 sm:p-3 flex flex-wrap items-center justify-between gap-3 shadow-lg backdrop-blur-md">
+          {/* Server Switchers: Primary clean pills */}
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mr-1">
               <Server className="w-3.5 h-3.5 text-rose-400" />
-              Server:
+              Source:
             </span>
-            {PROVIDERS.map((provider, index) => {
+            {PROVIDERS.slice(0, 2).map((provider) => {
               const isActive = provider.id === activeProvider.id
               return (
                 <button
@@ -502,61 +502,53 @@ export const PlayerView = () => {
                       : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800 hover:border-slate-700'
                   }`}
                 >
-                  <span>Server {index + 1}</span>
-                  <span className={`text-[10px] px-1 py-0.2 rounded font-mono ${isActive ? 'bg-black/30 text-rose-100' : 'bg-slate-800 text-slate-400'}`}>
-                    {provider.name.split(' ')[0]}
-                  </span>
+                  <span>{provider.name}</span>
                 </button>
               )
             })}
-          </div>
 
-          {/* Quick Actions: Sandbox, Reload, and Single Fullscreen Landscape Button */}
-          <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap">
-            {/* Sandbox Dropdown */}
+            {/* Other Mirrors Dropdown */}
             <div className="relative">
               <button
                 onClick={() => setSandboxDropdownOpen(!sandboxDropdownOpen)}
-                className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 hover:border-slate-600 text-slate-200 transition-colors"
-                title="Configure iframe sandboxing security mode"
+                className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:border-slate-700 text-slate-300 transition-colors"
+                title="Backup streaming mirrors"
               >
-                {sandboxMode === 'strict' ? (
-                  <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-                ) : (
-                  <Shield className="w-3.5 h-3.5 text-emerald-400" />
-                )}
-                <span>Sandbox: {sandboxConfig.name.split(' ')[0]}</span>
+                <span>Backup Mirrors</span>
+                <ChevronRight className={`w-3.5 h-3.5 transition-transform ${sandboxDropdownOpen ? 'rotate-90' : ''}`} />
               </button>
 
               {sandboxDropdownOpen && (
-                <div className="absolute right-0 mt-2 w-72 bg-slate-900 border border-slate-700 rounded-xl p-3 shadow-2xl z-50 animate-in fade-in zoom-in-95">
-                  <h4 className="text-xs font-bold text-slate-300 mb-2 pb-1 border-b border-slate-800">
-                    Iframe Sandboxing Security
+                <div className="absolute left-0 sm:right-0 sm:left-auto mt-2 w-64 bg-slate-900 border border-slate-700 rounded-xl p-2 shadow-2xl z-50 animate-in fade-in zoom-in-95">
+                  <h4 className="text-[11px] font-bold text-slate-400 uppercase px-2 py-1 mb-1">
+                    Alternative Servers
                   </h4>
-                  <div className="space-y-1.5">
-                    {Object.values(SANDBOX_MODES).map((mode) => (
+                  <div className="space-y-1">
+                    {PROVIDERS.slice(2).map((p) => (
                       <button
-                        key={mode.id}
+                        key={p.id}
                         onClick={() => {
-                          updateSandboxMode(mode.id)
+                          updateProviderId(p.id)
                           setSandboxDropdownOpen(false)
                         }}
-                        className={`w-full text-left p-2 rounded-lg text-xs transition-colors flex flex-col gap-0.5 ${
-                          sandboxMode === mode.id
-                            ? 'bg-rose-600/20 text-rose-300 border border-rose-500/40'
+                        className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs transition-colors flex items-center justify-between ${
+                          p.id === activeProvider.id
+                            ? 'bg-rose-600 text-white font-semibold'
                             : 'hover:bg-slate-800 text-slate-300'
                         }`}
                       >
-                        <span className="font-semibold">{mode.name}</span>
-                        <span className="text-[11px] text-slate-400 leading-tight">{mode.description}</span>
+                        <span>{p.name}</span>
+                        <span className="text-[10px] text-slate-400 font-mono">{p.badge}</span>
                       </button>
                     ))}
                   </div>
                 </div>
               )}
             </div>
+          </div>
 
-            {/* Reload Stream Player */}
+          {/* Quick Actions: Reload & Landscape Fullscreen */}
+          <div className="flex items-center gap-2">
             <button
               onClick={handleReloadIframe}
               className="p-1.5 text-slate-300 hover:text-white bg-slate-950 border border-slate-800 rounded-lg hover:bg-slate-800 transition-colors"
@@ -565,7 +557,6 @@ export const PlayerView = () => {
               <RotateCw className="w-4 h-4" />
             </button>
 
-            {/* SINGLE DEDICATED FULLSCREEN LANDSCAPE BUTTON */}
             <button
               onClick={toggleFullscreenLandscape}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 rounded-lg shadow-md shadow-rose-950/40 border border-rose-500 transition-all active:scale-95"
@@ -707,6 +698,42 @@ export const PlayerView = () => {
             </div>
           )}
         </div>
+
+        {/* TV Episode Quick Bar (Instant Previous / Next Navigation) */}
+        {isTv && (
+          <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl px-4 py-3 flex items-center justify-between gap-3 shadow-md backdrop-blur-md">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="p-1.5 rounded-lg bg-purple-950/60 border border-purple-500/30 text-purple-400">
+                <Tv className="w-4 h-4" />
+              </span>
+              <div className="text-xs truncate">
+                <span className="text-slate-400">Season {currentSeason} • </span>
+                <strong className="text-white font-semibold">Episode {currentEpisode}</strong>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={handlePrevEpisode}
+                disabled={currentEpisode <= 1}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-950 border border-slate-800 hover:bg-slate-800 text-slate-300 disabled:opacity-40 disabled:hover:bg-slate-950 transition-colors"
+                title="Previous Episode"
+              >
+                <ChevronLeft className="w-4 h-4" />
+                <span className="hidden sm:inline">Previous</span>
+              </button>
+
+              <button
+                onClick={handleNextEpisode}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-950/40 transition-all hover:scale-105 active:scale-95"
+                title="Next Episode"
+              >
+                <span>Next Episode</span>
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* TV Series Episode Drawer */}
         {isTv && (

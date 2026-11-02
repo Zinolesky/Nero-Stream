@@ -263,7 +263,7 @@ export function AppContent() {
                     <span>Movies Catalog</span>
                   </h1>
                   <p className="text-xs text-slate-400 mt-1">
-                    Option 2 dynamic routing: Loads player via <code className="text-rose-400">/embed/movie/&#123;tmdb_id&#125;</code>
+                    Explore trending blockbuster films and cinema classics ready for instant HD streaming.
                   </p>
                 </div>
 
@@ -286,7 +286,7 @@ export function AppContent() {
                     <span>TV Series Catalog</span>
                   </h1>
                   <p className="text-xs text-slate-400 mt-1">
-                    Option 2 nested routing: Dynamically selects season & episode via <code className="text-purple-400">/embed/tv/&#123;id&#125;/&#123;season&#125;/&#123;episode&#125;</code>
+                    Binge full seasons and episodes across acclaimed television shows and worldwide series.
                   </p>
                 </div>
 

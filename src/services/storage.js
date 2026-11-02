@@ -59,13 +59,17 @@ export const storage = {
 
   getProviderId: () => {
     try {
-      return (
+      const stored =
         localStorage.getItem(STORAGE_KEYS.PROVIDER_ID) ||
-        localStorage.getItem(LEGACY_KEYS.PROVIDER_ID) ||
-        'vidsrc-to'
-      )
+        localStorage.getItem(LEGACY_KEYS.PROVIDER_ID)
+      // Automatically migrate from legacy ad-heavy 'vidsrc-to' to clean 'vidlink'
+      if (!stored || stored === 'vidsrc-to') {
+        localStorage.setItem(STORAGE_KEYS.PROVIDER_ID, 'vidlink')
+        return 'vidlink'
+      }
+      return stored
     } catch {
-      return 'vidsrc-to'
+      return 'vidlink'
     }
   },
 
