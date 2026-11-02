@@ -70,10 +70,30 @@ export const PlayerView = () => {
 
   const playerContainerRef = useRef(null)
   const iframeRef = useRef(null)
+  const mirrorDropdownRef = useRef(null)
+  const topPickerRef = useRef(null)
   const brightnessTimerRef = useRef(null)
   const volumeTimerRef = useRef(null)
   const seekTimerRef = useRef(null)
   const playPauseTimerRef = useRef(null)
+
+  // Close dropdowns on outside click
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (mirrorDropdownRef.current && !mirrorDropdownRef.current.contains(e.target)) {
+        setSandboxDropdownOpen(false)
+      }
+      if (topPickerRef.current && !topPickerRef.current.contains(e.target)) {
+        setTopEpisodePickerOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('touchstart', handleClickOutside)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('touchstart', handleClickOutside)
+    }
+  }, [])
 
   const isNative = Capacitor.isNativePlatform()
   const isTv = currentPlaying?.media_type === 'tv'
@@ -457,7 +477,7 @@ export const PlayerView = () => {
         {/* Right Controls */}
         <div className="flex items-center gap-2">
           {isTv && (
-            <div className="relative">
+            <div className="relative" ref={topPickerRef}>
               <div className="flex items-center bg-slate-800/90 rounded-xl border border-slate-700/80 p-0.5 shadow-md">
                 <button
                   onClick={handlePrevEpisode}
@@ -627,7 +647,7 @@ export const PlayerView = () => {
         )}
 
         {/* Sleek Stream Control Toolbar (Movie Jungle Style) */}
-        <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-2.5 sm:p-3 flex flex-wrap items-center justify-between gap-3 shadow-lg backdrop-blur-md">
+        <div className="relative z-30 bg-slate-900/95 border border-slate-800 rounded-2xl p-2.5 sm:p-3 flex flex-wrap items-center justify-between gap-3 shadow-lg backdrop-blur-md">
           {/* Server Switchers: Primary clean pills */}
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5 mr-1">
@@ -652,7 +672,7 @@ export const PlayerView = () => {
             })}
 
             {/* Other Mirrors Dropdown */}
-            <div className="relative">
+            <div className="relative" ref={mirrorDropdownRef}>
               <button
                 onClick={() => setSandboxDropdownOpen(!sandboxDropdownOpen)}
                 className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-800 hover:border-slate-700 text-slate-300 transition-colors"
@@ -663,7 +683,7 @@ export const PlayerView = () => {
               </button>
 
               {sandboxDropdownOpen && (
-                <div className="absolute left-0 sm:right-0 sm:left-auto mt-2 w-64 bg-slate-900 border border-slate-700 rounded-xl p-2 shadow-2xl z-50 animate-in fade-in zoom-in-95">
+                <div className="absolute left-0 top-full mt-2 w-64 bg-slate-900/95 border border-slate-700 rounded-xl p-2 shadow-2xl z-50 animate-in fade-in zoom-in-95 backdrop-blur-xl">
                   <h4 className="text-[11px] font-bold text-slate-400 uppercase px-2 py-1 mb-1">
                     Alternative Servers
                   </h4>
@@ -794,7 +814,7 @@ export const PlayerView = () => {
         {/* Embedded Iframe Player Box (100% UNOBSTRUCTED: Direct native touch & mouse interaction) */}
         <div
           ref={playerContainerRef}
-          className={`relative w-full aspect-video bg-black rounded-2xl overflow-hidden border border-slate-800 shadow-2xl shadow-black/80 transition-all ${
+          className={`relative z-10 w-full aspect-video bg-black rounded-2xl overflow-hidden border border-slate-800 shadow-2xl shadow-black/80 transition-all ${
             isFullscreen ? 'fixed inset-0 z-50 rounded-none border-0 aspect-auto w-screen h-screen' : ''
           }`}
         >
