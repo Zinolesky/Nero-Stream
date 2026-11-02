@@ -14,6 +14,8 @@ import {
   ExternalLink,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  Layers,
   Tv,
   Film,
   Star,
@@ -52,6 +54,11 @@ export const PlayerView = () => {
   const [isFullscreen, setIsFullscreen] = useState(false)
   const [startAtOverride, setStartAtOverride] = useState(null)
   const [showResumeBanner, setShowResumeBanner] = useState(true)
+
+  // Top Season & Episode quick picker state
+  const [topEpisodes, setTopEpisodes] = useState([])
+  const [topEpisodePickerOpen, setTopEpisodePickerOpen] = useState(false)
+  const [pickerSeason, setPickerSeason] = useState(1)
 
   // Sleek In-App VLC & Samsung Gesture UI (All disappear in <= 1 second)
   const [brightness, setBrightness] = useState(1.0) // 0.25 to 1.5
@@ -233,6 +240,32 @@ export const PlayerView = () => {
     }
   }, [currentPlaying?.id, currentPlaying?.media_type])
 
+  // Synchronize pickerSeason when currentPlaying or currentSeason changes
+  useEffect(() => {
+    if (currentPlaying?.season) {
+      setPickerSeason(currentPlaying.season)
+    }
+  }, [currentPlaying?.id, currentPlaying?.season])
+
+  // Fetch season episodes for the top quick episode selector
+  useEffect(() => {
+    let isMounted = true
+    if (isTv && currentPlaying?.id) {
+      tmdb.getSeasonEpisodes(currentPlaying.id, pickerSeason)
+        .then((data) => {
+          if (isMounted && data?.episodes) {
+            setTopEpisodes(data.episodes)
+          }
+        })
+        .catch((e) => {
+          console.warn('Failed to fetch season episodes for top picker', e)
+        })
+    }
+    return () => {
+      isMounted = false
+    }
+  }, [isTv, currentPlaying?.id, pickerSeason])
+
   // Listen to VidLink postMessage events for real-time playback position & duration
   useEffect(() => {
     const handleMessage = (event) => {
@@ -298,6 +331,26 @@ export const PlayerView = () => {
       updatePlayingEpisode(currentSeason, currentEpisode - 1)
     }
   }
+
+  // Available seasons for TV series
+  const availableSeasons =
+    metadata?.seasons && metadata.seasons.length > 0
+      ? metadata.seasons.filter((s) => s.season_number > 0)
+      : Array.from({ length: metadata?.number_of_seasons || currentPlaying.number_of_seasons || 1 }, (_, i) => ({
+          season_number: i + 1,
+          name: `Season ${i + 1}`,
+          episode_count: 8,
+        }))
+
+  const selectedSeasonObj = availableSeasons.find((s) => s.season_number === pickerSeason)
+  const episodeCount = selectedSeasonObj?.episode_count || 12
+  const episodesList =
+    topEpisodes.length > 0
+      ? topEpisodes
+      : Array.from({ length: episodeCount }, (_, i) => ({
+          episode_number: i + 1,
+          name: `Episode ${i + 1}`,
+        }))
 
   // Single dedicated Fullscreen & Landscape button
   const toggleFullscreenLandscape = async () => {
@@ -398,25 +451,110 @@ export const PlayerView = () => {
         {/* Right Controls */}
         <div className="flex items-center gap-2">
           {isTv && (
-            <div className="flex items-center bg-slate-800/80 rounded-lg border border-slate-700/60 p-0.5">
-              <button
-                onClick={handlePrevEpisode}
-                disabled={currentEpisode <= 1}
-                className="p-1.5 text-slate-300 hover:text-white disabled:opacity-40 disabled:hover:text-slate-300 transition-colors"
-                title="Previous Episode"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <span className="text-xs px-2 font-mono text-rose-400">
-                S{currentSeason}:E{currentEpisode}
-              </span>
-              <button
-                onClick={handleNextEpisode}
-                className="p-1.5 text-slate-300 hover:text-white transition-colors"
-                title="Next Episode"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
+            <div className="relative">
+              <div className="flex items-center bg-slate-800/90 rounded-xl border border-slate-700/80 p-0.5 shadow-md">
+                <button
+                  onClick={handlePrevEpisode}
+                  disabled={currentEpisode <= 1}
+                  className="p-1.5 text-slate-300 hover:text-white disabled:opacity-30 disabled:hover:text-slate-300 transition-colors"
+                  title="Previous Episode"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+
+                <button
+                  onClick={() => setTopEpisodePickerOpen(!topEpisodePickerOpen)}
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold text-rose-400 hover:text-rose-300 hover:bg-slate-700/60 rounded-lg transition-all"
+                  title="Select Season & Episode without scrolling"
+                >
+                  <Layers className="w-3.5 h-3.5 text-purple-400" />
+                  <span className="font-mono">S{currentSeason}:E{currentEpisode}</span>
+                  <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform duration-200 ${topEpisodePickerOpen ? 'rotate-180' : ''}`} />
+                </button>
+
+                <button
+                  onClick={handleNextEpisode}
+                  disabled={episodesList.length > 0 && currentEpisode >= episodesList.length}
+                  className="p-1.5 text-slate-300 hover:text-white disabled:opacity-30 disabled:hover:text-slate-300 transition-colors"
+                  title="Next Episode"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Top Quick Season & Episode Popover Menu */}
+              {topEpisodePickerOpen && (
+                <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 max-h-[75vh] bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl p-4 z-50 backdrop-blur-xl animate-in fade-in zoom-in-95 flex flex-col">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                    <div className="flex items-center gap-2">
+                      <Layers className="w-4 h-4 text-purple-400" />
+                      <span className="text-xs font-bold text-white uppercase tracking-wider">
+                        Season & Episode Jump
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => setTopEpisodePickerOpen(false)}
+                      className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Season Horizontal Pills */}
+                  <div className="py-2.5 border-b border-slate-800 overflow-x-auto no-scrollbar flex items-center gap-1.5">
+                    {availableSeasons.map((s) => (
+                      <button
+                        key={s.season_number}
+                        onClick={() => setPickerSeason(s.season_number)}
+                        className={`px-3 py-1 rounded-lg text-xs font-bold whitespace-nowrap transition-colors ${
+                          s.season_number === pickerSeason
+                            ? 'bg-rose-600 text-white shadow-md shadow-rose-950/40'
+                            : 'bg-slate-950 text-slate-400 hover:text-white hover:bg-slate-800'
+                        }`}
+                      >
+                        {s.name || `Season ${s.season_number}`}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Episode List for Selected Season */}
+                  <div className="mt-3 overflow-y-auto max-h-60 space-y-1.5 pr-1">
+                    {episodesList.map((ep) => {
+                      const isCurrent =
+                        pickerSeason === currentSeason && ep.episode_number === currentEpisode
+                      return (
+                        <button
+                          key={ep.episode_number}
+                          onClick={() => {
+                            setStartAtOverride(0)
+                            updatePlayingEpisode(pickerSeason, ep.episode_number)
+                            setTopEpisodePickerOpen(false)
+                          }}
+                          className={`w-full flex items-center justify-between p-2 rounded-xl text-left text-xs transition-colors ${
+                            isCurrent
+                              ? 'bg-rose-950/80 border border-rose-500/60 text-white font-bold'
+                              : 'bg-slate-950/60 hover:bg-slate-800 text-slate-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0 pr-2">
+                            <span className="font-mono text-purple-400 font-bold shrink-0">
+                              E{ep.episode_number}
+                            </span>
+                            <span className="truncate">{ep.name || `Episode ${ep.episode_number}`}</span>
+                          </div>
+                          {isCurrent ? (
+                            <span className="text-[10px] text-rose-400 font-semibold shrink-0">
+                              Playing
+                            </span>
+                          ) : (
+                            <Play className="w-3 h-3 text-slate-500 hover:text-white shrink-0" />
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -546,6 +684,76 @@ export const PlayerView = () => {
               )}
             </div>
           </div>
+
+          {/* TV Quick Jump Selectors: Select Season & Episode directly from the top toolbar */}
+          {isTv && (
+            <div className="flex items-center gap-2 flex-wrap bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 shadow-sm">
+              {/* Season Select */}
+              <div className="flex items-center gap-1.5 text-xs">
+                <Layers className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider hidden sm:inline">Season</span>
+                <select
+                  value={currentSeason}
+                  onChange={(e) => {
+                    const s = Number(e.target.value)
+                    setStartAtOverride(0)
+                    updatePlayingEpisode(s, 1)
+                  }}
+                  className="bg-transparent text-xs font-bold text-rose-400 outline-none cursor-pointer"
+                  title="Switch Season"
+                >
+                  {availableSeasons.map((s) => (
+                    <option key={s.season_number} value={s.season_number} className="bg-slate-900 text-white">
+                      {s.name || `Season ${s.season_number}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <span className="text-slate-700">|</span>
+
+              {/* Episode Select */}
+              <div className="flex items-center gap-1.5 text-xs max-w-[150px] sm:max-w-[220px]">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider shrink-0">Ep</span>
+                <select
+                  value={currentEpisode}
+                  onChange={(e) => {
+                    const ep = Number(e.target.value)
+                    setStartAtOverride(0)
+                    updatePlayingEpisode(currentSeason, ep)
+                  }}
+                  className="bg-transparent text-xs font-semibold text-white outline-none cursor-pointer truncate w-full"
+                  title="Switch Episode"
+                >
+                  {episodesList.map((ep) => (
+                    <option key={ep.episode_number} value={ep.episode_number} className="bg-slate-900 text-white">
+                      E{ep.episode_number}: {ep.name || `Episode ${ep.episode_number}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Episode Step Buttons */}
+              <div className="flex items-center border-l border-slate-800 pl-1">
+                <button
+                  onClick={handlePrevEpisode}
+                  disabled={currentEpisode <= 1}
+                  className="p-1 text-slate-300 hover:text-white disabled:opacity-30 transition-colors"
+                  title="Previous Episode"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={handleNextEpisode}
+                  disabled={episodesList.length > 0 && currentEpisode >= episodesList.length}
+                  className="p-1 text-slate-300 hover:text-white disabled:opacity-30 transition-colors"
+                  title="Next Episode"
+                >
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Quick Actions: Reload & Landscape Fullscreen */}
           <div className="flex items-center gap-2">
@@ -702,15 +910,22 @@ export const PlayerView = () => {
         {/* TV Episode Quick Bar (Instant Previous / Next Navigation) */}
         {isTv && (
           <div className="bg-slate-900/90 border border-slate-800/90 rounded-2xl px-4 py-3 flex items-center justify-between gap-3 shadow-md backdrop-blur-md">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <span className="p-1.5 rounded-lg bg-purple-950/60 border border-purple-500/30 text-purple-400">
+            <button
+              onClick={() => setTopEpisodePickerOpen(true)}
+              className="flex items-center gap-2.5 min-w-0 text-left hover:opacity-85 transition-opacity group"
+              title="Click to jump to another season or episode"
+            >
+              <span className="p-1.5 rounded-lg bg-purple-950/60 border border-purple-500/30 text-purple-400 group-hover:border-purple-400 transition-colors">
                 <Tv className="w-4 h-4" />
               </span>
               <div className="text-xs truncate">
                 <span className="text-slate-400">Season {currentSeason} • </span>
                 <strong className="text-white font-semibold">Episode {currentEpisode}</strong>
+                <span className="text-[11px] text-rose-400 font-semibold ml-2 underline underline-offset-2">
+                  Change ▾
+                </span>
               </div>
-            </div>
+            </button>
 
             <div className="flex items-center gap-2 shrink-0">
               <button
@@ -725,7 +940,8 @@ export const PlayerView = () => {
 
               <button
                 onClick={handleNextEpisode}
-                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-950/40 transition-all hover:scale-105 active:scale-95"
+                disabled={episodesList.length > 0 && currentEpisode >= episodesList.length}
+                className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white shadow-md shadow-rose-950/40 transition-all hover:scale-105 active:scale-95 disabled:opacity-40"
                 title="Next Episode"
               >
                 <span>Next Episode</span>

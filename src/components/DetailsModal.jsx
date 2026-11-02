@@ -11,6 +11,7 @@ import {
   Calendar,
   Tv,
   Film,
+  Layers,
 } from 'lucide-react'
 
 export const DetailsModal = () => {
@@ -24,6 +25,7 @@ export const DetailsModal = () => {
 
   const [details, setDetails] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [selectedSeason, setSelectedSeason] = useState(1)
 
   const item = selectedDetailsItem
 
@@ -60,8 +62,23 @@ export const DetailsModal = () => {
   const year = dateStr ? new Date(dateStr).getFullYear() : null
   const bookmarked = isBookmarked(item.id, item.media_type)
 
+  // Clean list of seasons (excluding specials / season 0)
+  const availableSeasons =
+    details?.seasons && details.seasons.length > 0
+      ? details.seasons.filter((s) => s.season_number > 0)
+      : Array.from({ length: details?.number_of_seasons || item?.number_of_seasons || 1 }, (_, i) => ({
+          season_number: i + 1,
+          name: `Season ${i + 1}`,
+          episode_count: 8,
+        }))
+
   const handlePlayNow = () => {
-    playMedia(details || item)
+    playMedia(details || item, isTv ? selectedSeason : 1, 1)
+    closeModal()
+  }
+
+  const handlePlaySeason = (seasonNumber, episodeNumber = 1) => {
+    playMedia(details || item, seasonNumber, episodeNumber)
     closeModal()
   }
 
@@ -123,26 +140,62 @@ export const DetailsModal = () => {
             </div>
 
             {/* Quick Play in header */}
-            <button
-              onClick={handlePlayNow}
-              className="hidden sm:flex items-center gap-2 px-6 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-sm shadow-xl shadow-rose-950 shrink-0 transition-transform hover:scale-105 active:scale-95"
-            >
-              <Play className="w-4 h-4 fill-current" />
-              <span>Watch Now</span>
-            </button>
+            <div className="hidden sm:flex items-center gap-2.5 shrink-0">
+              {isTv && availableSeasons.length > 1 && (
+                <div className="flex items-center gap-1.5 px-3 py-2.5 rounded-xl bg-slate-950/80 border border-slate-700/80 backdrop-blur-md shadow-lg">
+                  <Layers className="w-3.5 h-3.5 text-purple-400" />
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Season</span>
+                  <select
+                    value={selectedSeason}
+                    onChange={(e) => setSelectedSeason(Number(e.target.value))}
+                    className="bg-transparent text-xs font-bold text-rose-400 outline-none cursor-pointer"
+                  >
+                    {availableSeasons.map((s) => (
+                      <option key={s.season_number} value={s.season_number} className="bg-slate-900 text-white">
+                        {s.name || `Season ${s.season_number}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <button
+                onClick={handlePlayNow}
+                className="flex items-center gap-2 px-6 py-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-sm shadow-xl shadow-rose-950 transition-transform hover:scale-105 active:scale-95"
+              >
+                <Play className="w-4 h-4 fill-current" />
+                <span>{isTv && availableSeasons.length > 1 ? `Watch Season ${selectedSeason}` : 'Watch Now'}</span>
+              </button>
+            </div>
           </div>
         </div>
 
         {/* Scrollable details */}
         <div className="p-6 space-y-5 overflow-y-auto">
           {/* Action Row for Mobile */}
-          <div className="flex sm:hidden items-center gap-3">
+          <div className="flex sm:hidden items-center gap-2">
+            {isTv && availableSeasons.length > 1 && (
+              <div className="flex items-center gap-1.5 px-2.5 py-2 rounded-xl bg-slate-950 border border-slate-800 shrink-0">
+                <span className="text-[10px] font-bold text-slate-400">Season</span>
+                <select
+                  value={selectedSeason}
+                  onChange={(e) => setSelectedSeason(Number(e.target.value))}
+                  className="bg-transparent text-xs font-bold text-rose-400 outline-none cursor-pointer"
+                >
+                  {availableSeasons.map((s) => (
+                    <option key={s.season_number} value={s.season_number} className="bg-slate-900 text-white">
+                      {s.season_number}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <button
               onClick={handlePlayNow}
               className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-rose-600 text-white font-bold text-sm"
             >
               <Play className="w-4 h-4 fill-current" />
-              <span>Watch Now</span>
+              <span>{isTv && availableSeasons.length > 1 ? `Watch S${selectedSeason}` : 'Watch Now'}</span>
             </button>
             <button
               onClick={() => toggleBookmark(item)}
@@ -217,23 +270,49 @@ export const DetailsModal = () => {
             </div>
           )}
 
-          {/* TV Seasons preview */}
-          {isTv && details?.seasons && (
-            <div className="space-y-2 pt-2 border-t border-slate-800">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                Available Seasons ({details.seasons.filter((s) => s.season_number > 0).length})
-              </h3>
-              <div className="flex items-center gap-2 flex-wrap">
-                {details.seasons
-                  .filter((s) => s.season_number > 0)
-                  .map((s) => (
-                    <span
+          {/* TV Seasons: Jump straight into any season of your choice */}
+          {isTv && availableSeasons.length > 0 && (
+            <div className="space-y-3 pt-3 border-t border-slate-800">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                    <Tv className="w-3.5 h-3.5 text-rose-500" />
+                    Available Seasons ({availableSeasons.length})
+                  </h3>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Click any season to jump directly into watching:
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
+                {availableSeasons.map((s) => {
+                  const isCurrent = s.season_number === selectedSeason
+                  return (
+                    <button
                       key={s.id || s.season_number}
-                      className="text-xs px-3 py-1 rounded-lg bg-slate-950 border border-slate-800 text-slate-300"
+                      onClick={() => handlePlaySeason(s.season_number, 1)}
+                      className={`group flex items-center justify-between p-3 rounded-2xl border text-xs font-semibold transition-all duration-150 text-left active:scale-95 ${
+                        isCurrent
+                          ? 'bg-rose-950/70 border-rose-500 text-white shadow-lg shadow-rose-950/40 ring-1 ring-rose-500/50'
+                          : 'bg-slate-950/90 border-slate-800 text-slate-300 hover:border-slate-700 hover:bg-slate-850 hover:text-white'
+                      }`}
+                      title={`Jump straight into ${s.name || `Season ${s.season_number}`}`}
                     >
-                      {s.name} ({s.episode_count || 8} eps)
-                    </span>
-                  ))}
+                      <div className="min-w-0 pr-2">
+                        <p className="font-bold truncate text-slate-200 group-hover:text-white">
+                          {s.name || `Season ${s.season_number}`}
+                        </p>
+                        <p className="text-[10px] text-slate-400 font-mono mt-0.5">
+                          {s.episode_count || 8} episodes
+                        </p>
+                      </div>
+                      <div className="p-2 rounded-xl bg-rose-600 group-hover:bg-rose-500 text-white shrink-0 shadow-md transition-transform group-hover:scale-110">
+                        <Play className="w-3.5 h-3.5 fill-current translate-x-0.5" />
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
             </div>
           )}
